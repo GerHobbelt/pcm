@@ -1,0 +1,26 @@
+Source: pcm
+Section: utils
+Priority: optional
+Maintainer: Adam Borowski <kilobyte@angband.pl>
+Build-Depends: debhelper-compat (= 13)
+Standards-Version: 4.6.0
+Homepage: https://github.com/opcm/pcm
+Vcs-Browser: https://github.com/kilobyte/pcm
+Vcs-Git: https://github.com/kilobyte/pcm
+Rules-Requires-Root: no
+
+Package: pcm
+Architecture: any-amd64
+Depends: ${shlibs:Depends}, ${misc:Depends}, hwdata
+Description: tools for Intel-specific processor performance and energy metrics
+ Processor Counter Monitor is a set of tools to access various performance
+ metrics provided by newer Intel processors.  Such metrics include:
+  * instructions per cycle
+  * core frequencies
+  * memory/interconnect/PCIe bandwidth
+  * cache misses and utilization
+  * time spent in C-states
+  * thermal headroom
+  * energy consumption
+  * NUMA accesses
+ and more.
