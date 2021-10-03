@@ -43,3 +43,11 @@ jobs:
     - name: build-lib
       working-directory: ${{env.GITHUB_WORKSPACE}}
       run: msbuild PCM-Lib_Win/pcm-lib.vcxproj /p:platform=win32
+      
+    - uses: "marvinpinto/action-automatic-releases@latest"
+      with:
+          repo_token: "${{ secrets.GITHUB_TOKEN }}"
+          automatic_release_tag: "latest"
+          prerelease: true
+          title: "Development Build"
+          files: **
