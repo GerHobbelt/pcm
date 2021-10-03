@@ -33,16 +33,18 @@ jobs:
         subprocess.run(["sdksetup.exe", "/q", "/norestart", "/features", "OptionId.WindowsDesktopSoftwareDevelopmentKit", "OptionId.NetFxSoftwareDevelopmentKit"], check=True, capture_output=True)
       shell: python
       
-    - name: Build
-      working-directory: ${{env.GITHUB_WORKSPACE}}
-      # Add additional options to the MSBuild command line here (like platform or verbosity level).
-      # See https://docs.microsoft.com/visualstudio/msbuild/msbuild-command-line-reference
-      #run: msbuild /m /p:Configuration=${{env.BUILD_CONFIGURATION}} ${{env.SOLUTION_FILE_PATH}}
-      run: msbuild PCM_Win/pcm.vcxproj /p:platform=win32
       
     - name: build-lib
       working-directory: ${{env.GITHUB_WORKSPACE}}
-      run: msbuild PCM-Lib_Win/pcm-lib.vcxproj /p:platform=win32
+      run: msbuild PCM-Lib_Win/pcm-lib.vcxproj /p:platform=win32 /p:Configuration=Release
+      
+    - name: build-serivces
+      working-directory: ${{env.GITHUB_WORKSPACE}}
+      run: msbuild PCM-Service_Win/pcm-service.vcxproj /p:platform=win32 /p:Configuration=Release
+      
+    - name: Build
+      working-directory: ${{env.GITHUB_WORKSPACE}}
+      run: msbuild PCM_Win/pcm.vcxproj /p:platform=win32 /p:Configuration=Release
       
     - uses: "marvinpinto/action-automatic-releases@latest"
       with:
@@ -51,6 +53,7 @@ jobs:
           prerelease: true
           title: "Development Build"
           files: |
-              PCM_Win/*
-              PCM-Lib_Win/*
+              PCM_Win/Release/pcm.exe
+              PCM-Lib_Win/Release/pcm-lib.dll
+              PCM-Service_Win/Release/pcm-service.dll
           
