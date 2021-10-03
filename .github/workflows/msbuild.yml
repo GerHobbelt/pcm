@@ -38,10 +38,6 @@ jobs:
       working-directory: ${{env.GITHUB_WORKSPACE}}
       run: msbuild PCM-Lib_Win/pcm-lib.vcxproj /p:platform=win32 /p:Configuration=Release
       
-    - name: build-serivces
-      working-directory: ${{env.GITHUB_WORKSPACE}}
-      run: msbuild PCM-Service_Win/pcm-service.vcxproj /p:platform=win32 /p:Configuration=Release
-      
     - name: Build
       working-directory: ${{env.GITHUB_WORKSPACE}}
       run: msbuild PCM_Win/pcm.vcxproj /p:platform=win32 /p:Configuration=Release
@@ -55,5 +51,4 @@ jobs:
           files: |
               PCM_Win/Release/pcm.exe
               PCM-Lib_Win/Release/pcm-lib.dll
-              PCM-Service_Win/Release/pcm-service.dll
           
