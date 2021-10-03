@@ -50,4 +50,7 @@ jobs:
           automatic_release_tag: "latest"
           prerelease: true
           title: "Development Build"
-          files: **
+          files: |
+              PCM_Win/*
+              PCM-Lib_Win/*
+          
