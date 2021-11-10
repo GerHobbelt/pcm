@@ -1,3 +1,11 @@
+pcm (202110-1) unstable; urgency=medium
+
+  * New upstream release.
+  * Fill in version.h
+  * Add libsimdjson-dev to B-Deps.
+
+ -- Adam Borowski <kilobyte@angband.pl>  Wed, 10 Nov 2021 19:47:27 +0100
+
 pcm (202107-1) experimental; urgency=medium
 
   * Initial release (Closes: #987235)
