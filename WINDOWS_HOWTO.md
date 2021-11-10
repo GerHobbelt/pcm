@@ -4,7 +4,7 @@ _For support of systems with more than _**_64_**_ logical cores you need to comp
 
 Command-line utility:
 
-1.Compile the windows MSR driver (msr.sys) with Windows DDK Kit (see the sources in the WinMSRDriver directory). For Windows 7 you have to sign the msr.sys driver additionally ([http://msdn.microsoft.com/en-us/library/ms537361(VS.85).aspx](%22http://)).
+1.Compile the windows MSR driver (msr.sys) with Windows DDK Kit (see the sources in the WinMSRDriver directory). For Windows 7 and later versions you have to sign the msr.sys driver additionally ([http://msdn.microsoft.com/en-us/library/ms537361(VS.85).aspx](http://msdn.microsoft.com/en-us/library/ms537361(VS.85).aspx)). To enable loading test signed drivers on the system: in administrator cmd console run `bcdedit /set testsigning on` and reboot). 
 
 2.Build the pcm.exe utility in the PCM_Win using Microsoft Visual Studio
 
@@ -18,9 +18,11 @@ Alternatively you can achieve the same using the “Properties” Windows menu o
 
 ![Screenshot](run-as-administrator.png)
 
+If you are getting the error `Starting MSR service failed with error 3 The system cannot find the path specified.` try to uninstall the driver by running `pcm --uninstallDriver` and optionally reboot the system.
+
 Graphical Perfmon front end:
 
-1.Compile the windows MSR driver (msr.sys) with Windows DDK Kit (see the sources in the WinMSRDriver directory). For Windows 7 you have to sign the msr.sys driver additionally ([http://msdn.microsoft.com/en-us/library/ms537361(VS.85).aspx](http://msdn.microsoft.com/en-us/library/ms537361(VS.85).aspx)).
+1.Compile the windows MSR driver (msr.sys) with Windows DDK Kit (see the sources in the WinMSRDriver directory). For Windows 7 and later versions you have to sign the msr.sys driver additionally ([http://msdn.microsoft.com/en-us/library/ms537361(VS.85).aspx](http://msdn.microsoft.com/en-us/library/ms537361(VS.85).aspx)).
 
 2.Copy msr.sys into the c:\windows\system32 directory
 

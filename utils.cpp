@@ -532,7 +532,7 @@ std::vector<std::string> split(const std::string & str, const char delim)
     return result;
 }
 
-uint64 read_number(char* str)
+uint64 read_number(const char* str)
 {
     std::istringstream stream(str);
     if (strstr(str, "x")) stream >> std::hex;
@@ -590,5 +590,25 @@ void print_help_force_rtm_abort_mode(const int alignment)
         std::cerr << "=> force RTM transaction abort mode to enable more programmable counters\n";
     }
 }
+
+#ifdef _MSC_VER
+std::string safe_getenv(const char* env)
+{
+    char * buffer;
+    std::string result;
+    if (_dupenv_s(&buffer, NULL, env) == 0 && buffer != nullptr)
+    {
+        result = buffer;
+        free(buffer);
+    }
+    return result;
+}
+#else
+std::string safe_getenv(const char* env)
+{
+    const auto getenvResult = std::getenv(env);
+    return getenvResult ? std::string(getenvResult) : std::string("");
+}
+#endif
 
 } // namespace pcm

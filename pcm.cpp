@@ -73,6 +73,12 @@ std::string l3cache_occ_format(uint64 o)
     return buffer;
 }
 
+template <class UncoreStateType>
+double getAverageUncoreFrequencyGhz(const UncoreStateType& before, const UncoreStateType& after) // in GHz
+{
+    return getAverageUncoreFrequency(before, after) / 1e9;
+}
+
 void print_help(const string prog_name)
 {
     cerr << "\n Usage: \n " << prog_name
@@ -433,6 +439,8 @@ void print_output(PCM * m,
             cout << " DIMM energy |";
         if (m->LLCReadMissLatencyMetricsAvailable())
             cout << " LLCRDMISSLAT (ns)";
+        if (m->uncoreFrequencyMetricAvailable())
+            cout << " UncFREQ (Ghz)";
         cout << "\n";
         cout << longDiv;
         for (uint32 i = 0; i < m->getNumSockets(); ++i)
@@ -463,6 +471,10 @@ void print_output(PCM * m,
                 if (m->LLCReadMissLatencyMetricsAvailable()) {
                   cout << setw(6) << getLLCReadMissLatency(sktstate1[i], sktstate2[i]);
                 }
+                cout << " ";
+                if (m->uncoreFrequencyMetricAvailable()) {
+                    cout << setw(4) << getAverageUncoreFrequencyGhz(sktstate1[i], sktstate2[i]);
+                }
                 cout << "\n";
         }
         cout << longDiv;
@@ -489,6 +501,10 @@ void print_output(PCM * m,
             cout << "         ";
             if (m->LLCReadMissLatencyMetricsAvailable()) {
                 cout << setw(6) << getLLCReadMissLatency(sstate1, sstate2);
+            }
+            cout << " ";
+            if (m->uncoreFrequencyMetricAvailable()) {
+                cout << setw(4) << getAverageUncoreFrequencyGhz(sstate1, sstate2);
             }
             cout << "\n";
         }
@@ -596,6 +612,8 @@ void print_csv_header(PCM * m,
             print_csv_header_helper(header);
         if (m->LLCReadMissLatencyMetricsAvailable())
             print_csv_header_helper(header);
+        if (m->uncoreFrequencyMetricAvailable())
+            print_csv_header_helper(header);
     }
 
     if (show_socket_output)
@@ -679,6 +697,11 @@ void print_csv_header(PCM * m,
             header = "LLCRDMISSLAT (ns)";
             print_csv_header_helper(header,m->getNumSockets());
         }
+        if (m->uncoreFrequencyMetricAvailable())
+        {
+            header = "UncFREQ (Ghz)";
+            print_csv_header_helper(header, m->getNumSockets());
+        }
     }
 
     if (show_core_output)
@@ -708,7 +731,8 @@ void print_csv_header(PCM * m,
     }
 
     // print second header line
-    cout << "\nDate,Time,";
+    cout << "\n";
+    printDateForCSV(Header2);
     if (show_system_output)
     {
         print_basic_metrics_csv_header(m);
@@ -747,6 +771,8 @@ void print_csv_header(PCM * m,
             cout << "DRAM Energy (Joules),";
         if (m->LLCReadMissLatencyMetricsAvailable())
             cout << "LLCRDMISSLAT (ns),";
+        if (m->uncoreFrequencyMetricAvailable())
+            cout << "UncFREQ (Ghz),";
     }
 
 
@@ -822,6 +848,11 @@ void print_csv_header(PCM * m,
                 cout << "SKT" << i << ",";
         }
         if (m->LLCReadMissLatencyMetricsAvailable())
+        {
+            for (uint32 i = 0; i < m->getNumSockets(); ++i)
+                cout << "SKT" << i << ",";
+        }
+        if (m->uncoreFrequencyMetricAvailable())
         {
             for (uint32 i = 0; i < m->getNumSockets(); ++i)
                 cout << "SKT" << i << ",";
@@ -911,22 +942,8 @@ void print_csv(PCM * m,
     const bool show_system_output
     )
 {
-#ifndef _MSC_VER
-    struct timeval timestamp;
-    gettimeofday(&timestamp, NULL);
-#endif
-    tm tt = pcm_localtime();
-    char old_fill = cout.fill('0');
-    cout.precision(3);
-    cout << "\n" << setw(4) << 1900 + tt.tm_year << '-' << setw(2) << 1 + tt.tm_mon << '-'
-        << setw(2) << tt.tm_mday << ',' << setw(2) << tt.tm_hour << ':'
-        << setw(2) << tt.tm_min << ':' << setw(2) << tt.tm_sec
-#ifdef _MSC_VER
-        << ',';
-#else
-        << "." << setw(3) << ceil(timestamp.tv_usec / 1000) << ',';
-#endif
-    cout.fill(old_fill);
+    cout << "\n";
+    printDateForCSV(CsvOutputType::Data);
 
     if (show_system_output)
     {
@@ -977,6 +994,8 @@ void print_csv(PCM * m,
             cout << getDRAMConsumedJoules(sstate1, sstate2) << ",";
         if (m->LLCReadMissLatencyMetricsAvailable())
             cout << getLLCReadMissLatency(sstate1, sstate2) << ",";
+        if (m->uncoreFrequencyMetricAvailable())
+            cout << getAverageUncoreFrequencyGhz(sstate1, sstate2) << ",";
     }
 
     if (show_socket_output)
@@ -1000,7 +1019,6 @@ void print_csv(PCM * m,
 
             cout << float_format(getInstructionsRetired(sktstate1[i], sktstate2[i])) << ","
                 << float_format(getCycles(sktstate1[i], sktstate2[i])) << ","
-                // FIXME: Wrong counters
                 << float_format(getInvariantTSC(cstates1[0], cstates2[0])) << ","
                 << getCoreIPC(sktstate1[i], sktstate2[i]) << ","
                 << 100. * (getCoreIPC(sktstate1[i], sktstate2[i]) / double(m->getMaxIPC())) << ","
@@ -1064,6 +1082,11 @@ void print_csv(PCM * m,
             for (uint32 i = 0; i < m->getNumSockets(); ++i)
                 cout << getLLCReadMissLatency(sktstate1[i], sktstate2[i]) << " ,";
         }
+        if (m->uncoreFrequencyMetricAvailable())
+        {
+            for (uint32 i = 0; i < m->getNumSockets(); ++i)
+                cout << getAverageUncoreFrequencyGhz(sktstate1[i], sktstate2[i]) << ",";
+        }
     }
 
     if (show_core_output)
@@ -1085,7 +1108,6 @@ void print_csv(PCM * m,
 
             cout << float_format(getInstructionsRetired(cstates1[i], cstates2[i])) << ","
                 << float_format(getCycles(cstates1[i], cstates2[i])) << ","
-                // FIXME: Wrong counters
                 << float_format(getInvariantTSC(cstates1[0], cstates2[0])) << ","
                 << getCoreIPC(cstates1[i], cstates2[i]) << ","
                 << 100. * (getCoreIPC(cstates1[i], cstates2[i]) / double(m->getMaxIPC())) << ","

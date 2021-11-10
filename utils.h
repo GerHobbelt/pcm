@@ -29,12 +29,16 @@ CT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT
 #include <time.h>
 #include "types.h"
 #include <vector>
+#include <chrono>
 #include <math.h>
+#include <assert.h>
 
 #ifndef _MSC_VER
 #include <csignal>
 #include <ctime>
 #include <cmath>
+#else
+#include <intrin.h>
 #endif
 
 namespace pcm {
@@ -214,16 +218,18 @@ inline std::istream & operator >> (std::istream && istr, s_expect && s)
     return istr;
 }
 
-inline tm pcm_localtime()
+inline std::pair<tm, uint64> pcm_localtime() // returns <tm, milliseconds>
 {
-    time_t now = time(NULL);
+    const auto durationSinceEpoch = std::chrono::system_clock::now().time_since_epoch();
+    const auto durationSinceEpochInSeconds = std::chrono::duration_cast<std::chrono::seconds>(durationSinceEpoch);
+    time_t now = durationSinceEpochInSeconds.count();
     tm result;
 #ifdef _MSC_VER
     localtime_s(&result, &now);
 #else
     localtime_r(&now, &result);
 #endif
-    return result;
+    return std::make_pair(result, std::chrono::duration_cast<std::chrono::milliseconds>(durationSinceEpoch- durationSinceEpochInSeconds).count());
 }
 
 enum CsvOutputType
@@ -260,10 +266,18 @@ inline void printDateForCSV(const CsvOutputType outputType)
         },
         []() { std::cout << "Date,Time,"; },
             []() {
-            tm tt = pcm_localtime();
+            std::pair<tm, uint64> tt{ pcm_localtime() };
             std::cout.precision(3);
-            std::cout << 1900 + tt.tm_year << '-' << 1 + tt.tm_mon << '-' << tt.tm_mday << ','
-                << tt.tm_hour << ':' << tt.tm_min << ':' << tt.tm_sec << ',';
+            char old_fill = std::cout.fill('0');
+            std::cout <<
+                std::setw(4) <<  1900 + tt.first.tm_year << '-' <<
+                std::setw(2) << 1 + tt.first.tm_mon << '-' <<
+                std::setw(2) << tt.first.tm_mday << ',' <<
+                std::setw(2) << tt.first.tm_hour << ':' <<
+                std::setw(2) << tt.first.tm_min << ':' <<
+                std::setw(2) << tt.first.tm_sec << '.' <<
+                std::setw(3) << tt.second << ','; // milliseconds
+            std::cout.fill(old_fill);
             std::cout.setf(std::ios::fixed);
             std::cout.precision(2);
         });
@@ -275,6 +289,23 @@ class PCM;
 bool CheckAndForceRTMAbortMode(const char * argv, PCM * m);
 
 void print_help_force_rtm_abort_mode(const int alignment);
+
+template <class F>
+void parseParam(int argc, char* argv[], const char* param, F f)
+{
+    if (argc > 1) do
+    {
+        argv++;
+        argc--;
+        if ((std::string("-") + param == *argv) || (std::string("/") + param == *argv))
+        {
+            argv++;
+            argc--;
+            f(*argv);
+            continue;
+        }
+    } while (argc > 1); // end of command line parsing loop
+}
 
 class MainLoop
 {
@@ -303,7 +334,7 @@ public:
         return numberOfIterations;
     }
     template <class Body>
-    void operator ()(Body body)
+    void operator ()(const Body & body)
     {
         unsigned int i = 1;
         // std::cerr << "DEBUG: numberOfIterations: " << numberOfIterations << "\n";
@@ -341,7 +372,7 @@ void drawStackedBar(const std::string & label, std::vector<StackedBarItem> & h, 
 // emulates scanf %i for hex 0x prefix otherwise assumes dec (no oct support)
 bool match(const std::string& subtoken, const std::string& sname, uint64* result);
 
-uint64 read_number(char* str);
+uint64 read_number(const char* str);
 
 union PCM_CPUID_INFO
 {
@@ -359,5 +390,88 @@ inline void pcm_cpuid(int leaf, PCM_CPUID_INFO& info)
         "=a" (info.reg.eax), "=b" (info.reg.ebx), "=c" (info.reg.ecx), "=d" (info.reg.edx) : "a" (leaf));
 #endif
 }
+
+
+inline uint32 build_bit_ui(uint32 beg, uint32 end)
+{
+    assert(end <= 31);
+    uint32 myll = 0;
+    if (end == 31)
+    {
+        myll = (uint32)(-1);
+    }
+    else
+    {
+        myll = (1 << (end + 1)) - 1;
+    }
+    myll = myll >> beg;
+    return myll;
+}
+
+inline uint32 extract_bits_ui(uint32 myin, uint32 beg, uint32 end)
+{
+    uint32 myll = 0;
+    uint32 beg1, end1;
+
+    // Let the user reverse the order of beg & end.
+    if (beg <= end)
+    {
+        beg1 = beg;
+        end1 = end;
+    }
+    else
+    {
+        beg1 = end;
+        end1 = beg;
+    }
+    myll = myin >> beg1;
+    myll = myll & build_bit_ui(beg1, end1);
+    return myll;
+}
+
+inline uint64 build_bit(uint32 beg, uint32 end)
+{
+    uint64 myll = 0;
+    if (end == 63)
+    {
+        myll = static_cast<uint64>(-1);
+    }
+    else
+    {
+        myll = (1LL << (end + 1)) - 1;
+    }
+    myll = myll >> beg;
+    return myll;
+}
+
+inline uint64 extract_bits(uint64 myin, uint32 beg, uint32 end)
+{
+    uint64 myll = 0;
+    uint32 beg1, end1;
+
+    // Let the user reverse the order of beg & end.
+    if (beg <= end)
+    {
+        beg1 = beg;
+        end1 = end;
+    }
+    else
+    {
+        beg1 = end;
+        end1 = beg;
+    }
+    myll = myin >> beg1;
+    myll = myll & build_bit(beg1, end1);
+    return myll;
+}
+
+std::string safe_getenv(const char* env);
+
+#ifdef _MSC_VER
+inline HANDLE openMSRDriver()
+{
+    return CreateFile(L"\\\\.\\RDMSR", GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL);
+}
+#endif
 
 } // namespace pcm

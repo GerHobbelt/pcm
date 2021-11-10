@@ -53,7 +53,7 @@ CXX=c++
 LIB= -lpthread -lc++
 endif
 
-COMMON_OBJS = msr.o cpucounters.o pci.o mmio.o bw.o utils.o topology.o dashboard.o debug.o threadpool.o resctrl.o
+COMMON_OBJS = msr.o cpucounters.o pci.o mmio.o bw.o utils.o topology.o dashboard.o debug.o threadpool.o resctrl.o simdjson_wrapper.o
 # export some variables
 export CFLAGS CXXFLAGS LDFLAGS
 
@@ -68,12 +68,14 @@ all: $(EXE) lib
 lib: libPCM.a
 
 daemon-binaries:
-	make -C daemon/daemon/Debug
-	make -C daemon/client/Debug
+	$(MAKE) -C daemon/daemon/Debug
+	$(MAKE) -C daemon/client/Debug
 
 klocwork: $(EXE)
 
+ifneq ($(MAKECMDGOALS),clean)
 -include $(OBJS:.o=.d)
+endif
 libPCM.a: $(COMMON_OBJS)
 	ar -rcs $@ $^
 
@@ -153,6 +155,6 @@ endif
 clean:
 	rm -rf *.x *.o *~ *.d *.a *.so
 ifeq ($(UNAME), Linux)
-	make -C daemon/daemon/Debug clean
-	make -C daemon/client/Debug clean
+	$(MAKE) -C daemon/daemon/Debug clean
+	$(MAKE) -C daemon/client/Debug clean
 endif

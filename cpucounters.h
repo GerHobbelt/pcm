@@ -22,13 +22,15 @@ THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND 
         Include this header file if you want to access CPU counters (core and uncore - including memory controller chips and QPI)
 */
 
-#define PCM_VERSION " ($Format:%ci ID=%h$)"
+#include "version.h"
 
 #ifndef PCM_API
 #define PCM_API
 #endif
 
 #undef PCM_HA_REQUESTS_READS_ONLY
+#undef PCM_DEBUG_TOPOLOGY // debug of topology enumeration routine
+#undef PCM_UNCORE_PMON_BOX_CHECK_STATUS // debug only
 
 #include "types.h"
 #include "msr.h"
@@ -99,8 +101,29 @@ struct PCM_API TopologyEntry // decribes a core
     int32 core_id;
     int32 tile_id; // tile is a constalation of 1 or more cores sharing salem L2 cache. Unique for entire system
     int32 socket;
+    int32 native_cpu_model = -1;
+    enum CoreType
+    {
+        Atom = 0x20,
+        Core = 0x40,
+        Invalid = -1
+    };
+    CoreType core_type = Invalid;
 
     TopologyEntry() : os_id(-1), thread_id (-1), core_id(-1), tile_id(-1), socket(-1) { }
+    const char* getCoreTypeStr()
+    {
+        switch (core_type)
+        {
+            case Atom:
+                return "Atom";
+            case Core:
+                return "Core";
+            case Invalid:
+                return "invalid";
+        }
+        return "unknown";
+    }
 };
 
 class HWRegister
@@ -245,8 +268,6 @@ public:
         return handle->read();;
     }
 };
-
-#undef PCM_UNCORE_PMON_BOX_CHECK_STATUS // debug only
 
 class UncorePMU
 {
@@ -544,6 +565,7 @@ class PCM_API PCM
 
     int32 cpu_family;
     int32 cpu_model;
+    bool hybrid = false;
     int32 cpu_stepping;
     int64 cpu_microcode_level;
     int32 max_cpuid;
@@ -622,7 +644,7 @@ class PCM_API PCM
 
     bool forceRTMAbortMode;
 
-    std::vector<uint64> FrontendBoundSlots, BadSpeculationSlots, BackendBoundSlots, RetiringSlots;
+    std::vector<uint64> FrontendBoundSlots, BadSpeculationSlots, BackendBoundSlots, RetiringSlots, AllSlotsRaw;
     bool isFixedCounterSupported(unsigned c);
     bool vm = false;
     bool linux_arch_perfmon = false;
@@ -782,7 +804,7 @@ public:
     */
     struct CustomCoreEventDescription
     {
-        int32 event_number, umask_value;
+        int32 event_number = 0, umask_value = 0;
     };
 
     /*! \brief Extended custom core event description
@@ -799,8 +821,11 @@ public:
         FixedEventControlRegister * fixedCfg; // if NULL, then default configuration performed for fixed counters
         uint32 nGPCounters;                   // number of general purpose counters
         EventSelectRegister * gpCounterCfg;   // general purpose counters, if NULL, then default configuration performed for GP counters
+        EventSelectRegister * gpCounterHybridAtomCfg; // general purpose counters for Atom cores in hybrid processors
         uint64 OffcoreResponseMsrValue[2];
-        ExtendedCustomCoreEventDescription() : fixedCfg(NULL), nGPCounters(0), gpCounterCfg(NULL)
+        uint64 LoadLatencyMsrValue, FrontendMsrValue;
+        static uint64 invalidMsrValue() { return ~0ULL; }
+        ExtendedCustomCoreEventDescription() : fixedCfg(NULL), nGPCounters(0), gpCounterCfg(nullptr), gpCounterHybridAtomCfg(nullptr), LoadLatencyMsrValue(invalidMsrValue()), FrontendMsrValue(invalidMsrValue())
         {
             OffcoreResponseMsrValue[0] = 0;
             OffcoreResponseMsrValue[1] = 0;
@@ -819,6 +844,7 @@ public:
 private:
     ProgramMode mode;
     CustomCoreEventDescription coreEventDesc[PERF_MAX_CUSTOM_COUNTERS];
+    CustomCoreEventDescription hybridAtomEventDesc[PERF_MAX_CUSTOM_COUNTERS];
 
 #ifdef _MSC_VER
     HANDLE numInstancesSemaphore;     // global semaphore that counts the number of PCM instances on the system
@@ -868,8 +894,8 @@ private:
         std::vector<EventSelectRegister> & programmedCustomCounters);
 
     bool PMUinUse();
-    void cleanupPMU();
-    void cleanupRDT();
+    void cleanupPMU(const bool silent = false);
+    void cleanupRDT(const bool silent = false);
     bool decrementInstanceSemaphore(); // returns true if it was the last instance
 
 #ifdef __APPLE__
@@ -961,7 +987,7 @@ private:
     void programPCU(uint32 * events, const uint64 filter);
     void programUBOX(const uint64* events);
 
-    void cleanupUncorePMUs();
+    void cleanupUncorePMUs(const bool silent = false);
 
     bool isCLX() const // Cascade Lake-SP
     {
@@ -1090,7 +1116,7 @@ public:
         program PMUs: Intel(r) VTune(tm), Intel(r) Performance Tuning Utility (PTU). This code may make
         VTune or PTU measurements invalid. VTune or PTU measurement may make measurement with this code invalid. Please enable either usage of these routines or VTune/PTU/etc.
     */
-    ErrorCode program(const ProgramMode mode_ = DEFAULT_EVENTS, const void * parameter_ = NULL); // program counters and start counting
+    ErrorCode program(const ProgramMode mode_ = DEFAULT_EVENTS, const void * parameter_ = NULL, const bool silent = false); // program counters and start counting
 
     /*! \brief Programs uncore latency counters on microarchitectures codename SandyBridge-EP and later Xeon uarch
         \param enable_pmm enables DDR/PMM. See possible profile values in pcm-latency.cpp example
@@ -1137,14 +1163,20 @@ public:
     // vector of IDs. E.g. for core {raw event} or {raw event, offcore response1 msr value, } or {raw event, offcore response1 msr value, offcore response2}
     // or for cha/cbo {raw event, filter value}, etc
     // + user-supplied name
-    typedef std::pair<std::array<uint64, 3>, std::string> RawEventConfig;
+    typedef std::pair<std::array<uint64, 5>, std::string> RawEventConfig;
     struct RawPMUConfig
     {
         std::vector<RawEventConfig> programmable;
         std::vector<RawEventConfig> fixed;
     };
+    enum {
+        OCR0Pos = 1,
+        OCR1Pos = 2,
+        LoadLatencyPos = 3,
+        FrontendPos = 4
+    };
     typedef std::map<std::string, RawPMUConfig> RawPMUConfigs;
-    ErrorCode program(const RawPMUConfigs& allPMUConfigs);
+    ErrorCode program(const RawPMUConfigs& curPMUConfigs, const bool silent = false);
 
     //! \brief Freezes uncore event counting (works only on microarchitecture codename SandyBridge-EP and IvyTown)
     void freezeServerUncoreCounters();
@@ -1163,7 +1195,7 @@ public:
             One needs to call this method when your program finishes or/and you are not going to use the
             performance counting routines anymore.
 */
-    void cleanup();
+    void cleanup(const bool silent = false);
 
     /*! \brief Forces PMU reset
 
@@ -1318,6 +1350,7 @@ public:
         RKL = 167,
         TGL = 140,
         TGL_1 = 141,
+        ADL = 151,
         BDX = 79,
         KNL = 87,
         SKL = 94,
@@ -1504,6 +1537,8 @@ public:
         if (ICL == cpu_model || TGL == cpu_model || RKL == cpu_model) return 5;
         switch (cpu_model)
         {
+        case ADL:
+            return 6;
         case SNOWRIDGE:
             return 4;
         case DENVERTON:
@@ -1728,13 +1763,13 @@ public:
 
 
     //! \brief Enables "force all RTM transaction abort" mode also enabling 4+ programmable counters on Skylake generation processors
-    void enableForceRTMAbortMode();
+    void enableForceRTMAbortMode(const bool silent = false);
 
     //! \brief queries status of "force all RTM transaction abort" mode
     bool isForceRTMAbortModeEnabled() const;
 
     //! \brief Disables "force all RTM transaction abort" mode restricting the number of programmable counters on Skylake generation processors to 3
-    void disableForceRTMAbortMode();
+    void disableForceRTMAbortMode(const bool silent = false);
 
     //! \brief queries availability of "force all RTM transaction abort" mode
     bool isForceRTMAbortModeAvailable() const;
@@ -1785,6 +1820,7 @@ public:
                  || useSKLPath()
                  || cpu_model == PCM::SKX
                  || cpu_model == PCM::ICX
+                 || cpu_model == PCM::ADL
                );
     }
 
@@ -1879,6 +1915,11 @@ public:
             || cpu_model == PCM::ICX
 	    || cpu_model  == PCM::SNOWRIDGE
         );
+    }
+
+    bool uncoreFrequencyMetricAvailable() const
+    {
+        return MSR.empty() == false && uboxPMUs.size() == getNumSockets() && getNumCores() == getNumOnlineCores();
     }
 
     bool LatencyMetricsAvailable() const
@@ -2108,6 +2149,8 @@ class BasicCounterState
     template <class CounterStateType>
     friend double getAverageFrequency(const CounterStateType & before, const CounterStateType & after);
     template <class CounterStateType>
+    friend double getAverageFrequencyFromClocks(const int64 clocks, const CounterStateType& before, const CounterStateType& after);
+    template <class CounterStateType>
     friend double getActiveAverageFrequency(const CounterStateType & before, const CounterStateType & after);
     template <class CounterStateType>
     friend double getRelativeFrequency(const CounterStateType & before, const CounterStateType & after);
@@ -2156,6 +2199,8 @@ class BasicCounterState
     template <class CounterStateType>
     friend uint64 getSMICount(const CounterStateType & before, const CounterStateType & after);
     template <class CounterStateType>
+    friend uint64 getAllSlotsRaw(const CounterStateType& before, const CounterStateType& after);
+    template <class CounterStateType>
     friend uint64 getAllSlots(const CounterStateType & before, const CounterStateType & after);
     template <class CounterStateType>
     friend double getBackendBound(const CounterStateType & before, const CounterStateType & after);
@@ -2189,7 +2234,7 @@ protected:
     uint64 MemoryBWLocal;
     uint64 MemoryBWTotal;
     uint64 SMICount;
-    uint64 FrontendBoundSlots, BadSpeculationSlots, BackendBoundSlots, RetiringSlots;
+    uint64 FrontendBoundSlots, BadSpeculationSlots, BackendBoundSlots, RetiringSlots, AllSlotsRaw;
 
 public:
     BasicCounterState() :
@@ -2199,10 +2244,11 @@ public:
         MemoryBWLocal(0),
         MemoryBWTotal(0),
         SMICount(0),
-	FrontendBoundSlots(0),
-	BadSpeculationSlots(0),
-	BackendBoundSlots(0),
-	RetiringSlots(0)
+    FrontendBoundSlots(0),
+    BadSpeculationSlots(0),
+    BackendBoundSlots(0),
+    RetiringSlots(0),
+    AllSlotsRaw(0)
     {
         memset(CStateResidency, 0, sizeof(CStateResidency));
     }
@@ -2235,6 +2281,7 @@ public:
         BadSpeculationSlots += o.BadSpeculationSlots;
         BackendBoundSlots += o.BackendBoundSlots;
         RetiringSlots += o.RetiringSlots;
+        AllSlotsRaw += o.AllSlotsRaw;
         //std::cout << "after PCM debug aggregate "<< FrontendBoundSlots << " " << BadSpeculationSlots << " " << BackendBoundSlots << " " <<RetiringSlots << std::endl;
         assert(FrontendBoundSlots >= old.FrontendBoundSlots);
         assert(BadSpeculationSlots >= old.BadSpeculationSlots);
@@ -2601,6 +2648,10 @@ class UncoreCounterState
     friend double getLLCReadMissLatency(const CounterStateType & before, const CounterStateType & after);
     template <class CounterStateType>
     friend double getLocalMemoryRequestRatio(const CounterStateType & before, const CounterStateType & after);
+    template <class CounterStateType>
+    friend double getAverageUncoreFrequency(const CounterStateType& before, const CounterStateType& after);
+    template <class CounterStateType>
+    friend double getAverageFrequencyFromClocks(const int64 clocks, const CounterStateType& before, const CounterStateType& after);
 
 protected:
     uint64 UncMCFullWrites;
@@ -3073,6 +3124,16 @@ inline double getTotalExecUsage(const CounterStateType & before, const CounterSt
     return -1;
 }
 
+template <class StateType>
+double getAverageFrequencyFromClocks(const int64 clocks, const StateType& before, const StateType& after) // in Hz
+{
+    const int64 timer_clocks = after.InvariantTSC - before.InvariantTSC;
+    PCM* m = PCM::getInstance();
+    if (timer_clocks != 0 && m)
+        return double(m->getNominalFrequency()) * double(clocks) / double(timer_clocks);
+    return -1;
+}
+
 /*! \brief Computes average core frequency also taking Intel Turbo Boost technology into account
 
     \param before CPU counter state before the experiment
@@ -3082,12 +3143,21 @@ inline double getTotalExecUsage(const CounterStateType & before, const CounterSt
 template <class CounterStateType>
 double getAverageFrequency(const CounterStateType & before, const CounterStateType & after) // in Hz
 {
-    int64 clocks = after.CpuClkUnhaltedThread - before.CpuClkUnhaltedThread;
-    int64 timer_clocks = after.InvariantTSC - before.InvariantTSC;
-    PCM * m = PCM::getInstance();
-    if (timer_clocks != 0 && m)
-        return double(m->getNominalFrequency()) * double(clocks) / double(timer_clocks);
-    return -1;
+    return getAverageFrequencyFromClocks(after.CpuClkUnhaltedThread - before.CpuClkUnhaltedThread, before, after);
+}
+
+/*! \brief Computes average uncore frequency
+
+    \param before CPU counter state before the experiment
+    \param after CPU counter state after the experiment
+    \return frequency in Hz
+*/
+template <class UncoreStateType>
+double getAverageUncoreFrequency(const UncoreStateType& before, const UncoreStateType & after) // in Hz
+{
+    auto m = PCM::getInstance();
+    assert(m);
+    return double(m->getNumOnlineCores()) * getAverageFrequencyFromClocks(after.UncClocks - before.UncClocks, before, after) / double(m->getNumOnlineSockets());
 }
 
 /*! \brief Computes average core frequency when not in powersaving C0-state (also taking Intel Turbo Boost technology into account)
@@ -3199,7 +3269,7 @@ uint64 getL2CacheMisses(const CounterStateType & before, const CounterStateType 
     auto pcm = PCM::getInstance();
     if (pcm->isL2CacheMissesAvailable() == false) return 0ULL;
     const auto cpu_model = pcm->getCPUModel();
-    if (pcm->useSkylakeEvents() || cpu_model == PCM::SNOWRIDGE) {
+    if (pcm->useSkylakeEvents() || cpu_model == PCM::SNOWRIDGE || cpu_model == PCM::ADL) {
         return after.Event[BasicCounterState::SKLL2MissPos] - before.Event[BasicCounterState::SKLL2MissPos];
     }
     if (pcm->isAtom() || cpu_model == PCM::KNL)
@@ -3294,7 +3364,7 @@ uint64 getL3CacheHitsSnoop(const CounterStateType & before, const CounterStateTy
     auto pcm = PCM::getInstance();
     if (!pcm->isL3CacheHitsSnoopAvailable()) return 0;
     const auto cpu_model = pcm->getCPUModel();
-    if (cpu_model == PCM::SNOWRIDGE)
+    if (cpu_model == PCM::SNOWRIDGE || cpu_model == PCM::ADL)
     {
         const int64 misses = getL3CacheMisses(before, after);
         const int64 refs = after.Event[BasicCounterState::ArchLLCRefPos] - before.Event[BasicCounterState::ArchLLCRefPos];
@@ -3581,7 +3651,7 @@ inline double getIncomingQPILinkUtilization(uint32 socketNr, uint32 linkNr, cons
 
     const double bytes = (double)getIncomingQPILinkBytes(socketNr, linkNr, before, after);
     const uint64 max_speed = m->getQPILinkSpeed(socketNr, linkNr);
-    const double max_bytes = (double)(double(max_speed) * double(getInvariantTSC(before, after) / double(m->getNumCores())) / double(m->getNominalFrequency()));
+    const double max_bytes = (double)(double(max_speed) * double(getInvariantTSC(before, after) / double(m->getNumOnlineCores())) / double(m->getNominalFrequency()));
     return bytes / max_bytes;
 }
 
@@ -3619,7 +3689,7 @@ inline double getOutgoingQPILinkUtilization(uint32 socketNr, uint32 linkNr, cons
         const uint64 a = after.outgoingQPIFlits[socketNr][linkNr]; // data + non-data flits or idle (null) flits
         // prevent overflows due to counter dissynchronisation
         double flits = (double)((a > b) ? (a - b) : 0);
-        const double max_flits = ((double(getInvariantTSC(before, after)) * double(m->getQPILinkSpeed(socketNr, linkNr)) / m->getBytesPerFlit()) / double(m->getNominalFrequency())) / double(m->getNumCores());
+        const double max_flits = ((double(getInvariantTSC(before, after)) * double(m->getQPILinkSpeed(socketNr, linkNr)) / m->getBytesPerFlit()) / double(m->getNominalFrequency())) / double(m->getNumOnlineCores());
         if(m->hasUPI())
         {
             flits = flits/3.;
@@ -3647,7 +3717,7 @@ inline uint64 getOutgoingQPILinkBytes(uint32 socketNr, uint32 linkNr, const Syst
     if (!(m->outgoingQPITrafficMetricsAvailable())) return 0ULL;
 
     const double util = getOutgoingQPILinkUtilization(socketNr, linkNr, before, after);
-    const double max_bytes = (double(m->getQPILinkSpeed(socketNr, linkNr)) * double(getInvariantTSC(before, after) / double(m->getNumCores())) / double(m->getNominalFrequency()));
+    const double max_bytes = (double(m->getQPILinkSpeed(socketNr, linkNr)) * double(getInvariantTSC(before, after) / double(m->getNumOnlineCores())) / double(m->getNominalFrequency()));
 
     return (uint64)(max_bytes * util);
 }
@@ -3807,7 +3877,7 @@ inline double getLLCReadMissLatency(const CounterStateType & before, const Count
     const double inserts = double(after.TORInsertsIAMiss) - double(before.TORInsertsIAMiss);
     const double unc_clocks = double(after.UncClocks) - double(before.UncClocks);
     auto * m = PCM::getInstance();
-    const double seconds = double(getInvariantTSC(before, after)) / double(m->getNumCores()/m->getNumSockets()) / double(m->getNominalFrequency());
+    const double seconds = double(getInvariantTSC(before, after)) / double(m->getNumOnlineCores()/m->getNumSockets()) / double(m->getNominalFrequency());
     return 1e9*seconds*(occupancy/inserts)/unc_clocks;
 }
 
@@ -3825,6 +3895,12 @@ inline uint64 getAllSlots(const CounterStateType & before, const CounterStateTyp
     assert(c >= 0);
     assert(d >= 0);
     return a + b + c + d;
+}
+
+template <class CounterStateType>
+inline uint64 getAllSlotsRaw(const CounterStateType& before, const CounterStateType& after)
+{
+    return after.AllSlotsRaw - before.AllSlotsRaw;
 }
 
 //! \brief Returns unutilized pipeline slots where no uop was delivered due to lack of back-end resources as range 0..1
