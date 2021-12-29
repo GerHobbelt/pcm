@@ -55,7 +55,9 @@ namespace PCMDaemon {
 		//Put the poll interval in shared memory so that the client knows
 		sharedPCMState_->pollMs = pollIntervalMs_;
 
-		updatePCMState(&systemStatesBefore_, &socketStatesBefore_, &coreStatesBefore_);
+                collectionTimeAfter_ = 0;
+
+		updatePCMState(&systemStatesBefore_, &socketStatesBefore_, &coreStatesBefore_, collectionTimeBefore_);
 		systemStatesForQPIBefore_ = SystemCounterState(systemStatesBefore_);
 
 		serverUncoreCounterStatesBefore_ = new ServerUncoreCounterState[pcmInstance_->getNumSockets()];
@@ -160,28 +162,7 @@ namespace PCMDaemon {
 			status = pcmInstance_->program();
 		}
 
-		switch (status)
-		{
-			case PCM::Success:
-				break;
-			case PCM::MSRAccessDenied:
-				std::cerr << "Access to Intel(r) Performance Counter Monitor has denied (no MSR or PCI CFG space access).\n";
-				exit(EXIT_FAILURE);
-			case PCM::PMUBusy:
-				std::cerr << "Access to Intel(r) Performance Counter Monitor has denied (Performance Monitoring Unit is occupied by other application). Try to stop the application that uses PMU.\n";
-				std::cerr << "Alternatively you can try to reset PMU configuration at your own risk. Try to reset? (y/n)\n";
-				char yn;
-				std::cin >> yn;
-				if ('y' == yn)
-				{
-					pcmInstance_->resetPMU();
-					std::cerr << "PMU configuration has been reset. Try to rerun the program again.\n";
-				}
-				exit(EXIT_FAILURE);
-			default:
-				std::cerr << "Access to Intel(r) Performance Counter Monitor has denied (Unknown error).\n";
-				exit(EXIT_FAILURE);
-		}
+        pcmInstance_->checkError(status);
 	}
 
 	void Daemon::readApplicationArguments(int argc, char *argv[])
@@ -405,7 +386,7 @@ namespace PCMDaemon {
 
         sharedPCMState_->lastUpdateTscBegin = RDTSC();
 
-		updatePCMState(&systemStatesAfter_, &socketStatesAfter_, &coreStatesAfter_);
+		updatePCMState(&systemStatesAfter_, &socketStatesAfter_, &coreStatesAfter_, collectionTimeAfter_);
 
 		getPCMSystem();
 
@@ -442,7 +423,7 @@ namespace PCMDaemon {
 		std::swap(collectionTimeBefore_, collectionTimeAfter_);
 	}
 
-	void Daemon::updatePCMState(SystemCounterState* systemStates, std::vector<SocketCounterState>* socketStates, std::vector<CoreCounterState>* coreStates)
+	void Daemon::updatePCMState(SystemCounterState* systemStates, std::vector<SocketCounterState>* socketStates, std::vector<CoreCounterState>* coreStates, uint64 & t)
 	{
 		if(subscribers_.find("core") != subscribers_.end())
 		{
@@ -455,7 +436,7 @@ namespace PCMDaemon {
 				pcmInstance_->getUncoreCounterStates(*systemStates, *socketStates);
 			}
 		}
-		collectionTimeAfter_ = pcmInstance_->getTickCount();
+		t = pcmInstance_->getTickCount();
 	}
 
 	void Daemon::swapPCMBeforeAfterState()

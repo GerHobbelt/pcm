@@ -61,7 +61,7 @@ int main(int argc, char * argv[])
         {
         case 'w':
             write = true;
-            value = read_number(optarg);
+            value = (pcm::uint32)read_number(optarg);
             break;
         case 'd':
             dec = true;
@@ -115,4 +115,5 @@ int main(int argc, char * argv[])
         std::cerr << "Error accessing registers: " << e.what() << "\n";
         std::cerr << "Please check if the program can access MSR/PCICFG drivers.\n";
     }
+    return 0;
 }

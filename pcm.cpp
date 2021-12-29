@@ -99,7 +99,7 @@ void print_help(const string prog_name)
     cerr << "  -m    | --multiple-instances | /m  => allow multiple PCM instances running in parallel\n";
     cerr << "  -csv[=file.csv] | /csv[=file.csv]  => output compact CSV format to screen or\n"
         << "                                        to a file, in case filename is provided\n"
-        << "                                        the format used is documented here: https://software.intel.com/content/www/us/en/develop/blogs/intel-pcm-column-names-decoder-ring.html\n";
+        << "                                        the format used is documented here: https://www.intel.com/content/www/us/en/developer/articles/technical/intel-pcm-column-names-decoder-ring.html\n";
     cerr << "  -i[=number] | /i[=number]          => allow to determine number of iterations\n";
     print_help_force_rtm_abort_mode(37);
     cerr << " Examples:\n";
@@ -191,7 +191,11 @@ void print_output(PCM * m,
     if (m->PMMTrafficMetricsAvailable()) cout << " PMM WR : bytes written to PMM memory (in GBytes)\n";
     if (m->MCDRAMmemoryTrafficMetricsAvailable()) cout << " MCDRAM READ  : bytes read from MCDRAM controller (in GBytes)\n";
     if (m->MCDRAMmemoryTrafficMetricsAvailable()) cout << " MCDRAM WRITE : bytes written to MCDRAM controller (in GBytes)\n";
-    if (m->memoryIOTrafficMetricAvailable()) cout << " IO    : bytes read/written due to IO requests to memory controller (in GBytes); this may be an over estimate due to same-cache-line partial requests\n";
+    if (m->memoryIOTrafficMetricAvailable()) {
+        cout << " IO    : bytes read/written due to IO requests to memory controller (in GBytes); this may be an over estimate due to same-cache-line partial requests\n";
+        cout << " IA    : bytes read/written due to IA requests to memory controller (in GBytes); this may be an over estimate due to same-cache-line partial requests\n";
+        cout << " GT    : bytes read/written due to GT requests to memory controller (in GBytes); this may be an over estimate due to same-cache-line partial requests\n";
+    }
     if (m->L3CacheOccupancyMetricAvailable()) cout << " L3OCC : L3 occupancy (in KBytes)\n";
     if (m->CoreLocalMemoryBWMetricAvailable()) cout << " LMB   : L3 cache external bandwidth satisfied by local memory (in MBytes)\n";
     if (m->CoreRemoteMemoryBWMetricAvailable()) cout << " RMB   : L3 cache external bandwidth satisfied by remote memory (in MBytes)\n";
@@ -433,6 +437,10 @@ void print_output(PCM * m,
             cout << " MCDRAM READ | MCDRAM WRITE |";
         if (m->memoryIOTrafficMetricAvailable())
             cout << "   IO   |";
+        if (m->memoryIOTrafficMetricAvailable())
+            cout << "   IA   |";
+        if (m->memoryIOTrafficMetricAvailable())
+            cout << "   GT   |";
         if (m->packageEnergyMetricsAvailable())
             cout << " CPU energy |";
         if (m->dramEnergyMetricsAvailable())
@@ -457,8 +465,11 @@ void print_output(PCM * m,
                 if (m->MCDRAMmemoryTrafficMetricsAvailable())
                     cout << "   " << setw(11) << getBytesReadFromEDC(sktstate1[i], sktstate2[i]) / double(1e9) <<
                             "    " << setw(11) << getBytesWrittenToEDC(sktstate1[i], sktstate2[i]) / double(1e9);
-                if (m->memoryIOTrafficMetricAvailable())
+                if (m->memoryIOTrafficMetricAvailable()) {
                     cout << "    " << setw(5) << getIORequestBytesFromMC(sktstate1[i], sktstate2[i]) / double(1e9);
+                    cout << "    " << setw(5) << getIARequestBytesFromMC(sktstate1[i], sktstate2[i]) / double(1e9);
+                    cout << "    " << setw(5) << getGTRequestBytesFromMC(sktstate1[i], sktstate2[i]) / double(1e9);
+                }
                 cout << "     ";
                 if(m->packageEnergyMetricsAvailable()) {
                   cout << setw(6) << getConsumedJoules(sktstate1[i], sktstate2[i]);
@@ -637,6 +648,8 @@ void print_csv_header(PCM * m,
                 print_csv_header_helper(header,2);
             if (m->MCDRAMmemoryTrafficMetricsAvailable())
                 print_csv_header_helper(header,2);
+            if (m->memoryIOTrafficMetricAvailable())
+                print_csv_header_helper(header,3);
             print_csv_header_helper(header,7); //ACYC,TIME(ticks),PhysIPC,PhysIPC%,INSTnom,INSTnom%,
         }
 
@@ -795,6 +808,8 @@ void print_csv_header(PCM * m,
                  cout << "PMM_RD,PMM_WR,";
              if (m->MCDRAMmemoryTrafficMetricsAvailable())
                  cout << "MCDRAM_READ,MCDRAM_WRITE,";
+             if (m->memoryIOTrafficMetricAvailable())
+                 cout << "IO,IA,GT,";
              cout << "TEMP,";
              cout << "INST,ACYC,TIME(ticks),PhysIPC,PhysIPC%,INSTnom,INSTnom%,";
         }
@@ -1015,6 +1030,11 @@ void print_csv(PCM * m,
             if (m->MCDRAMmemoryTrafficMetricsAvailable())
                 cout << ',' << getBytesReadFromEDC(sktstate1[i], sktstate2[i]) / double(1e9) <<
                 ',' << getBytesWrittenToEDC(sktstate1[i], sktstate2[i]) / double(1e9);
+            if (m->memoryIOTrafficMetricAvailable()) {
+                cout << ',' << getIORequestBytesFromMC(sktstate1[i], sktstate2[i]) / double(1e9)
+                     << ',' << getIARequestBytesFromMC(sktstate1[i], sktstate2[i]) / double(1e9)
+                     << ',' << getGTRequestBytesFromMC(sktstate1[i], sktstate2[i]) / double(1e9);
+            }
             cout << ',' << temp_format(sktstate2[i].getThermalHeadroom()) << ',';
 
             cout << float_format(getInstructionsRetired(sktstate1[i], sktstate2[i])) << ","
@@ -1348,7 +1368,7 @@ int main(int argc, char * argv[])
         exit(EXIT_FAILURE);
     case PCM::PMUBusy:
         cerr << "Access to Processor Counter Monitor has denied (Performance Monitoring Unit is occupied by other application). Try to stop the application that uses PMU.\n";
-        cerr << "Alternatively you can try running PCM with option -r to reset PMU configuration at your own risk.\n";
+        cerr << "Alternatively you can try running PCM with option -r to reset PMU.\n";
         exit(EXIT_FAILURE);
     default:
         cerr << "Access to Processor Counter Monitor has denied (Unknown error).\n";

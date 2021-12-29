@@ -29,7 +29,6 @@ typedef unsigned int uint;
 
 using namespace std;
 using namespace pcm;
-const uint32 max_sockets = 4;
 #define NUM_SAMPLES (1)
 
 static void print(const vector<string> &listNames, bool csv)
@@ -47,7 +46,7 @@ static uint getIdent (const string &s)
      * We are adding "|  " before and "  " after the event name hence +5 to
      * strlen(eventNames). Rest of the logic is to center the event name.
      */
-    uint ident = 5 + s.size();
+    uint ident = 5 + (uint)s.size();
     return (3 + ident / 2);
 }
 
@@ -81,12 +80,6 @@ protected:
 void IPlatform::init()
 {
     print_cpu_details();
-
-    if (m_socketCount > max_sockets)
-    {
-        cerr << "Only systems with up to "<<max_sockets<<" sockets are supported! Program aborted\n";
-        exit(EXIT_FAILURE);
-    }
 
     if (m_pcm->isSomeCoreOfflined())
     {
@@ -147,7 +140,7 @@ public:
             eventNames(events), eventGroups(eventCodes)
     {
         int eventsCount = 0;
-        for (auto &group : eventGroups) eventsCount += group.size();
+        for (auto &group : eventGroups) eventsCount += (int)group.size();
 
         m_delay = uint32(delay * 1000 / (eventGroups.size()) / NUM_SAMPLES);
         if (m_delay * eventsCount * NUM_SAMPLES < delay * 1000) ++m_delay;
@@ -187,10 +180,10 @@ inline uint64 LegacyPlatform::getEventCount (uint skt, uint idx)
 uint LegacyPlatform::eventGroupOffset(eventGroup_t &eventGroup)
 {
     uint offset = 0;
-    uint grpIdx = &eventGroup - eventGroups.data();
+    uint grpIdx = (uint)(&eventGroup - eventGroups.data());
 
     for (auto iter = eventGroups.begin(); iter < eventGroups.begin() + grpIdx; iter++)
-         offset += iter->size();
+         offset += (uint)iter->size();
 
     return offset;
 }
@@ -271,7 +264,7 @@ void LegacyPlatform::printSocketScopeEvent(uint skt, eventFilter filter, uint id
 void LegacyPlatform::printSocketScopeEvents(uint skt, eventFilter filter)
 {
     if (!m_csv) {
-        int ident = strlen("Skt |") / 2;
+        int ident = (int)strlen("Skt |") / 2;
         cout << setw(ident) << skt << setw(ident) << ' ';
     } else
         cout << skt;
@@ -331,20 +324,20 @@ void LegacyPlatform::printAggregatedEvents()
 {
     if (!m_csv)
     {
-        uint len = strlen("Skt ");
+        uint len = (uint)strlen("Skt ");
 
         for(auto& evt : eventNames)
-            len += (5 + evt.size());
+            len += (5 + (uint)evt.size());
 
         if (m_bandwidth)
             for(auto& bw : bwNames)
-                len += (5 + bw.size());
+                len += (5 + (uint)bw.size());
 
         while (len--)
             cout << '-';
         cout << "\n";
 
-        int ident = strlen("Skt |") /2 ;
+        int ident = (int)strlen("Skt |") /2 ;
         cout << setw(ident) << "*" << setw(ident) << ' ';
 
         for (uint idx = 0; idx < eventNames.size(); ++idx)

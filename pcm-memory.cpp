@@ -51,27 +51,27 @@ const uint32 max_edc_channels = ServerUncoreCounterState::maxChannels;
 const uint32 max_imc_controllers = ServerUncoreCounterState::maxControllers;
 
 typedef struct memdata {
-    float iMC_Rd_socket_chan[max_sockets][ServerUncoreCounterState::maxChannels];
-    float iMC_Wr_socket_chan[max_sockets][ServerUncoreCounterState::maxChannels];
-    float iMC_PMM_Rd_socket_chan[max_sockets][ServerUncoreCounterState::maxChannels];
-    float iMC_PMM_Wr_socket_chan[max_sockets][ServerUncoreCounterState::maxChannels];
-    float iMC_PMM_MemoryMode_Miss_socket_chan[max_sockets][ServerUncoreCounterState::maxChannels];
-    float iMC_Rd_socket[max_sockets];
-    float iMC_Wr_socket[max_sockets];
-    float iMC_PMM_Rd_socket[max_sockets];
-    float iMC_PMM_Wr_socket[max_sockets];
-    float iMC_PMM_MemoryMode_Miss_socket[max_sockets];
-    bool iMC_NM_hit_rate_supported;
-    float iMC_PMM_MemoryMode_Hit_socket[max_sockets];
-    bool M2M_NM_read_hit_rate_supported;
-    float iMC_NM_hit_rate[max_sockets];
-    float M2M_NM_read_hit_rate[max_sockets][max_imc_controllers];
-    float EDC_Rd_socket_chan[max_sockets][max_edc_channels];
-    float EDC_Wr_socket_chan[max_sockets][max_edc_channels];
-    float EDC_Rd_socket[max_sockets];
-    float EDC_Wr_socket[max_sockets];
-    uint64 partial_write[max_sockets];
-    ServerUncoreMemoryMetrics metrics;
+    float iMC_Rd_socket_chan[max_sockets][ServerUncoreCounterState::maxChannels]{};
+    float iMC_Wr_socket_chan[max_sockets][ServerUncoreCounterState::maxChannels]{};
+    float iMC_PMM_Rd_socket_chan[max_sockets][ServerUncoreCounterState::maxChannels]{};
+    float iMC_PMM_Wr_socket_chan[max_sockets][ServerUncoreCounterState::maxChannels]{};
+    float iMC_PMM_MemoryMode_Miss_socket_chan[max_sockets][ServerUncoreCounterState::maxChannels]{};
+    float iMC_Rd_socket[max_sockets]{};
+    float iMC_Wr_socket[max_sockets]{};
+    float iMC_PMM_Rd_socket[max_sockets]{};
+    float iMC_PMM_Wr_socket[max_sockets]{};
+    float iMC_PMM_MemoryMode_Miss_socket[max_sockets]{};
+    bool iMC_NM_hit_rate_supported{};
+    float iMC_PMM_MemoryMode_Hit_socket[max_sockets]{};
+    bool M2M_NM_read_hit_rate_supported{};
+    float iMC_NM_hit_rate[max_sockets]{};
+    float M2M_NM_read_hit_rate[max_sockets][max_imc_controllers]{};
+    float EDC_Rd_socket_chan[max_sockets][max_edc_channels]{};
+    float EDC_Wr_socket_chan[max_sockets][max_edc_channels]{};
+    float EDC_Rd_socket[max_sockets]{};
+    float EDC_Wr_socket[max_sockets]{};
+    uint64 partial_write[max_sockets]{};
+    ServerUncoreMemoryMetrics metrics{};
 } memdata_t;
 
 bool anyPmem(const ServerUncoreMemoryMetrics & metrics)
@@ -101,6 +101,8 @@ void print_help(const string prog_name)
     cerr << "  -columns=X | /columns=X            => Number of columns to display the NUMA Nodes, defaults to 2.\n";
     cerr << "  -all | /all                        => Display all channels (even with no traffic)\n";
     cerr << "  -i[=number] | /i[=number]          => allow to determine number of iterations\n";
+    cerr << "  -s                                 => silence information output and print only measurements\n";
+    cerr << "  -u                                 => update measurements instead of printing new ones\n";
 #ifdef _MSC_VER
     cerr << "  --uninstallDriver | --installDriver=> (un)install driver\n";
 #endif
@@ -161,7 +163,36 @@ void printSocketRankBWHeader(uint32 no_columns, uint32 skt)
     cout << "\n";
 }
 
-void printSocketChannelBW(PCM */*m*/, memdata_t *md, uint32 no_columns, uint32 skt)
+void printSocketRankBWHeader_cvt(const uint32 numSockets, const uint32 num_imc_channels, const int rankA, const int rankB)
+{
+    printDateForCSV(Header1);
+    for (uint32 skt = 0 ; skt < (numSockets) ; ++skt) {
+        for (uint32 channel = 0; channel < num_imc_channels; ++channel) {
+            if (rankA >= 0)
+                cout << "SKT" << skt << "," << "SKT" << skt << ",";
+            if (rankB >= 0)
+                cout << "SKT" << skt << "," << "SKT" << skt << ",";
+        }
+    }
+    cout << endl;
+
+    printDateForCSV(Header2);
+    for (uint32 skt = 0 ; skt < (numSockets) ; ++skt) {
+        for (uint32 channel = 0; channel < num_imc_channels; ++channel) {
+            if (rankA >= 0) {
+                cout << "Mem_Ch" << channel << "_R" << rankA << "_reads,"
+                     << "Mem_Ch" << channel << "_R" << setw(1) << rankA << "_writes,";
+            }
+            if (rankB >= 0) {
+                cout << "Mem_Ch" << channel << "_R" << rankB << "_reads,"
+                     << "Mem_Ch" << channel << "_R" << setw(1) << rankB << "_writes,";
+            }
+        }
+    }
+    cout << endl;
+}
+
+void printSocketChannelBW(PCM * /*m*/, memdata_t *md, uint32 no_columns, uint32 skt)
 {
     for (uint32 channel = 0; channel < max_imc_channels; ++channel) {
         // check all the sockets for bad channel "channel"
@@ -219,6 +250,25 @@ void printSocketChannelBW(uint32 no_columns, uint32 skt, uint32 num_imc_channels
           cout << "\n";
         }
     }
+}
+
+void printSocketChannelBW_cvt(const uint32 numSockets, const uint32 num_imc_channels, const ServerUncoreCounterState * uncState1,
+        const ServerUncoreCounterState * uncState2, const uint64 elapsedTime, const int rankA, const int rankB)
+{
+    printDateForCSV(Data);
+    for (uint32 skt = 0 ; skt < numSockets; ++skt) {
+        for (uint32 channel = 0 ; channel < num_imc_channels ; ++channel) {
+            if(rankA >= 0) {
+                cout << (float) (getMCCounter(channel,ServerPCICFGUncore::EventPosition::READ_RANK_A,uncState1[skt],uncState2[skt]) * 64 / 1000000.0 / (elapsedTime/1000.0))
+                << "," << (float) (getMCCounter(channel,ServerPCICFGUncore::EventPosition::WRITE_RANK_A,uncState1[skt],uncState2[skt]) * 64 / 1000000.0 / (elapsedTime/1000.0)) << ",";
+            }
+            if(rankB >= 0) {
+                cout << (float) (getMCCounter(channel,ServerPCICFGUncore::EventPosition::READ_RANK_B,uncState1[skt],uncState2[skt]) * 64 / 1000000.0 / (elapsedTime/1000.0))
+                << "," << (float) (getMCCounter(channel,ServerPCICFGUncore::EventPosition::WRITE_RANK_B,uncState1[skt],uncState2[skt]) * 64 / 1000000.0 / (elapsedTime/1000.0)) << ",";
+            }
+        }
+    }
+    cout << endl;
 }
 
 float AD_BW(const memdata_t *md, const uint32 skt)
@@ -315,13 +365,16 @@ void printSocketBWFooter(uint32 no_columns, uint32 skt, const memdata_t *md)
     cout << "\n";
 }
 
-void display_bandwidth(PCM *m, memdata_t *md, const uint32 no_columns, const bool show_channel_output)
+void display_bandwidth(PCM *m, memdata_t *md, const uint32 no_columns, const bool show_channel_output, const bool print_update)
 {
     float sysReadDRAM = 0.0, sysWriteDRAM = 0.0, sysReadPMM = 0.0, sysWritePMM = 0.0;
     uint32 numSockets = m->getNumSockets();
     uint32 skt = 0;
     cout.setf(ios::fixed);
     cout.precision(2);
+
+    if (print_update)
+        clear_screen();
 
     while (skt < numSockets)
     {
@@ -684,7 +737,8 @@ void calculate_bandwidth(PCM *m,
     bool & csvheader,
     uint32 no_columns,
     const ServerUncoreMemoryMetrics & metrics,
-    const bool show_channel_output)
+    const bool show_channel_output,
+    const bool print_update)
 {
     //const uint32 num_imc_channels = m->getMCChannelsPerSocket();
     //const uint32 num_edc_channels = m->getEDCChannelsPerSocket();
@@ -812,8 +866,8 @@ void calculate_bandwidth(PCM *m,
                 }
                 else if (metrics == PmemMemoryMode)
                 {
-                    md.iMC_PMM_MemoryMode_Miss_socket[skt] += (pmmMemoryModeCleanMisses + pmmMemoryModeDirtyMisses) / (elapsedTime / 1000.0);
-                    md.iMC_PMM_MemoryMode_Hit_socket[skt] += (pmmMemoryModeHits) / (elapsedTime / 1000.0);
+                    md.iMC_PMM_MemoryMode_Miss_socket[skt] += (float)((pmmMemoryModeCleanMisses + pmmMemoryModeDirtyMisses) / (elapsedTime / 1000.0));
+                    md.iMC_PMM_MemoryMode_Hit_socket[skt] += (float)((pmmMemoryModeHits) / (elapsedTime / 1000.0));
                 }
                 else
                 {
@@ -877,37 +931,39 @@ void calculate_bandwidth(PCM *m,
     }
     else
     {
-        display_bandwidth(m, &md, no_columns, show_channel_output);
+        display_bandwidth(m, &md, no_columns, show_channel_output, print_update);
     }
 }
 
-void calculate_bandwidth_rank(PCM *m, const ServerUncoreCounterState uncState1[], const ServerUncoreCounterState uncState2[], const uint64 elapsedTime, const bool /*csv*/, bool & /*csvheader*/, const uint32 no_columns, const int rankA, const int rankB)
+void calculate_bandwidth_rank(PCM *m, const ServerUncoreCounterState uncState1[], const ServerUncoreCounterState uncState2[],
+		const uint64 elapsedTime, const bool csv, bool &csvheader, const uint32 no_columns, const int rankA, const int rankB)
 {
     uint32 skt = 0;
     cout.setf(ios::fixed);
     cout.precision(2);
     uint32 numSockets = m->getNumSockets();
 
-    while(skt < numSockets)
-    {
-        auto printRow = [&skt, &uncState1, &uncState2, &elapsedTime, &rankA, &rankB](const uint32 no_columns) {
-            printSocketRankBWHeader(no_columns, skt);
-            printSocketChannelBW(no_columns, skt, max_imc_channels, uncState1, uncState2, elapsedTime, rankA, rankB);
-            for (uint32 i = skt; i < (no_columns + skt); ++i)
-            {
-                cout << "|-------------------------------------------|";
-            }
-            cout << "\n";
-            skt += no_columns;
-        };
-        // Full row
-        if ((skt + no_columns) <= numSockets)
-        {
-            printRow(no_columns);
+    if (csv) {
+        if (csvheader) {
+            printSocketRankBWHeader_cvt(numSockets, max_imc_channels, rankA, rankB);
+            csvheader = false;
         }
-        else //Display the remaining sockets in this row
-        {
-            printRow(numSockets - skt);
+        printSocketChannelBW_cvt(numSockets, max_imc_channels, uncState1, uncState2, elapsedTime, rankA, rankB);
+    } else {
+        while(skt < numSockets) {
+            auto printRow = [&skt, &uncState1, &uncState2, &elapsedTime, &rankA, &rankB](const uint32 no_columns) {
+                printSocketRankBWHeader(no_columns, skt);
+                printSocketChannelBW(no_columns, skt, max_imc_channels, uncState1, uncState2, elapsedTime, rankA, rankB);
+                for (uint32 i = skt; i < (no_columns + skt); ++i)
+                    cout << "|-------------------------------------------|";
+                cout << "\n";
+                skt += no_columns;
+            };
+            // Full row
+            if ((skt + no_columns) <= numSockets)
+                printRow(no_columns);
+            else //Display the remaining sockets in this row
+                printRow(numSockets - skt);
         }
     }
 }
@@ -916,10 +972,13 @@ int main(int argc, char * argv[])
 {
     set_signal_handlers();
 
+    null_stream nullStream2;
 #ifdef PCM_FORCE_SILENT
-    null_stream nullStream1, nullStream2;
+    null_stream nullStream1;
     cout.rdbuf(&nullStream1);
     cerr.rdbuf(&nullStream2);
+#else
+    check_and_set_silent(argc, argv, nullStream2);
 #endif
 
     cerr << "\n";
@@ -930,7 +989,7 @@ int main(int argc, char * argv[])
     cerr << "\n";
 
     double delay = -1.0;
-    bool csv = false, csvheader=false, show_channel_output=true;
+    bool csv = false, csvheader = false, show_channel_output = true, print_update = false;
     uint32 no_columns = DEFAULT_DISPLAY_COLUMNS; // Default number of columns is 2
     char * sysCmd = NULL;
     char ** sysArgv = NULL;
@@ -954,12 +1013,11 @@ int main(int argc, char * argv[])
             print_help(program);
             exit(EXIT_FAILURE);
         }
-        else
-        if (strncmp(*argv, "-csv",4) == 0 ||
-            strncmp(*argv, "/csv",4) == 0)
+        else if (strncmp(*argv, "-csv",4) == 0 ||
+                 strncmp(*argv, "/csv",4) == 0)
         {
             csv = true;
-			csvheader = true;
+            csvheader = true;
             string cmd = string(*argv);
             size_t found = cmd.find('=',4);
             if (found != string::npos) {
@@ -970,14 +1028,12 @@ int main(int argc, char * argv[])
             }
             continue;
         }
-	else
-        if (mainLoop.parseArg(*argv))
+        else if (mainLoop.parseArg(*argv))
         {
             continue;
         }
-        else
-        if (strncmp(*argv, "-columns", 8) == 0 ||
-            strncmp(*argv, "/columns", 8) == 0)
+        else if (strncmp(*argv, "-columns", 8) == 0 ||
+                 strncmp(*argv, "/columns", 8) == 0)
         {
             string cmd = string(*argv);
             size_t found = cmd.find('=',2);
@@ -990,8 +1046,8 @@ int main(int argc, char * argv[])
             }
             continue;
         }
-        if (strncmp(*argv, "-rank", 5) == 0 ||
-            strncmp(*argv, "/rank", 5) == 0)
+        else if (strncmp(*argv, "-rank", 5) == 0 ||
+                 strncmp(*argv, "/rank", 5) == 0)
         {
             string cmd = string(*argv);
             size_t found = cmd.find('=',2);
@@ -999,77 +1055,81 @@ int main(int argc, char * argv[])
                 int rank = atoi(cmd.substr(found+1).c_str());
                 if (rankA >= 0 && rankB >= 0)
                 {
-                  cerr << "At most two DIMM ranks can be monitored \n";
-                  exit(EXIT_FAILURE);
-                }
-                else
-                {
-                  if(rank > 7) {
-                      cerr << "Invalid rank number " << rank << "\n";
-                      exit(EXIT_FAILURE);
-                  }
-                  if(rankA < 0) rankA = rank;
-                  else if(rankB < 0) rankB = rank;
+                    cerr << "At most two DIMM ranks can be monitored \n";
+                    exit(EXIT_FAILURE);
+                } else {
+                    if(rank > 7) {
+                        cerr << "Invalid rank number " << rank << "\n";
+                        exit(EXIT_FAILURE);
+                    }
+                    if(rankA < 0) rankA = rank;
+                    else if(rankB < 0) rankB = rank;
+                    metrics = PartialWrites;
                 }
             }
             continue;
         }
-        if (strncmp(*argv, "--nochannel", 11) == 0 ||
-            strncmp(*argv, "-nc", 3) == 0 ||
-            strncmp(*argv, "/nc", 3) == 0)
+        else if (strncmp(*argv, "--nochannel", 11) == 0 ||
+                 strncmp(*argv, "-nc", 3) == 0 ||
+                 strncmp(*argv, "/nc", 3) == 0)
         {
             show_channel_output = false;
             continue;
         }
-
-        if (strncmp(*argv, "-pmm", 4) == 0 ||
-            strncmp(*argv, "/pmm", 4) == 0 ||
-            strncmp(*argv, "-pmem", 5) == 0 ||
-            strncmp(*argv, "/pmem", 5) == 0 )
+        else if (strncmp(*argv, "-pmm", 4) == 0 ||
+                 strncmp(*argv, "/pmm", 4) == 0 ||
+                 strncmp(*argv, "-pmem", 5) == 0 ||
+                 strncmp(*argv, "/pmem", 5) == 0 )
         {
             metrics = Pmem;
             continue;
         }
-
-        if (strncmp(*argv, "-all", 4) == 0 ||
-            strncmp(*argv, "/all", 4) == 0)
+        else if (strncmp(*argv, "-all", 4) == 0 ||
+                 strncmp(*argv, "/all", 4) == 0)
         {
             skipInactiveChannels = false;
             continue;
         }
-
-        if (strncmp(*argv, "-mixed", 6) == 0 ||
-            strncmp(*argv, "/mixed", 6) == 0)
+        else if (strncmp(*argv, "-mixed", 6) == 0 ||
+                 strncmp(*argv, "/mixed", 6) == 0)
         {
             metrics = PmemMixedMode;
             continue;
         }
-
-        if (strncmp(*argv, "-mm", 3) == 0 ||
-            strncmp(*argv, "/mm", 3) == 0)
+        else if (strncmp(*argv, "-mm", 3) == 0 ||
+                 strncmp(*argv, "/mm", 3) == 0)
         {
             metrics = PmemMemoryMode;
             show_channel_output = false;
             continue;
         }
-
-        if (strncmp(*argv, "-partial", 8) == 0 ||
-            strncmp(*argv, "/partial", 8) == 0)
+        else if (strncmp(*argv, "-partial", 8) == 0 ||
+                 strncmp(*argv, "/partial", 8) == 0)
         {
             metrics = PartialWrites;
             continue;
         }
+        else if (strncmp(*argv, "-s", 2) == 0 ||
+                 strncmp(*argv, "/s", 2) == 0)
+        {
+            //already checked by check_and_set_silent()
+            continue;
+        }
+        else if (strncmp(*argv, "-u", 2) == 0 ||
+                 strncmp(*argv, "/u", 2) == 0)
+        {
+            print_update = true;
+            continue;
+        }
 #ifdef _MSC_VER
-        else
-        if (strncmp(*argv, "--uninstallDriver", 17) == 0)
+        else if (strncmp(*argv, "--uninstallDriver", 17) == 0)
         {
             Driver tmpDrvObject;
             tmpDrvObject.uninstall();
             cerr << "msr.sys driver has been uninstalled. You might need to reboot the system to make this effective.\n";
             exit(EXIT_SUCCESS);
         }
-        else
-        if (strncmp(*argv, "--installDriver", 15) == 0)
+        else if (strncmp(*argv, "--installDriver", 15) == 0)
         {
             Driver tmpDrvObject = Driver(Driver::msrLocalPath());
             if (!tmpDrvObject.start())
@@ -1081,8 +1141,7 @@ int main(int argc, char * argv[])
             exit(EXIT_SUCCESS);
         }
 #endif
-        else
-        if (strncmp(*argv, "--", 2) == 0)
+        else if (strncmp(*argv, "--", 2) == 0)
         {
             argv++;
             sysCmd = *argv;
@@ -1105,7 +1164,7 @@ int main(int argc, char * argv[])
             }
             continue;
         }
-    } while(argc > 1); // end of command line partsing loop
+    } while (argc > 1); // end of command line parsing loop
 
     m->disableJKTWorkaround();
     print_cpu_details();
@@ -1132,28 +1191,7 @@ int main(int argc, char * argv[])
         exit(EXIT_FAILURE);
     }
     PCM::ErrorCode status = m->programServerUncoreMemoryMetrics(metrics, rankA, rankB);
-    switch (status)
-    {
-        case PCM::Success:
-            break;
-        case PCM::MSRAccessDenied:
-            cerr << "Access to Processor Counter Monitor has denied (no MSR or PCI CFG space access).\n";
-            exit(EXIT_FAILURE);
-        case PCM::PMUBusy:
-            cerr << "Access to Processor Counter Monitor has denied (Performance Monitoring Unit is occupied by other application). Try to stop the application that uses PMU.\n";
-            cerr << "Alternatively you can try to reset PMU configuration at your own risk. Try to reset? (y/n)\n";
-            char yn;
-            cin >> yn;
-            if ('y' == yn)
-            {
-                m->resetPMU();
-                cerr << "PMU configuration has been reset. Try to rerun the program again.\n";
-            }
-            exit(EXIT_FAILURE);
-        default:
-            cerr << "Access to Processor Counter Monitor has denied (Unknown error).\n";
-            exit(EXIT_FAILURE);
-    }
+    m->checkError(status);
 
     if(m->getNumSockets() > max_sockets)
     {
@@ -1161,7 +1199,7 @@ int main(int argc, char * argv[])
         exit(EXIT_FAILURE);
     }
 
-    max_imc_channels = m->getMCChannelsPerSocket();
+    max_imc_channels = (pcm::uint32)m->getMCChannelsPerSocket();
 
     ServerUncoreCounterState * BeforeState = new ServerUncoreCounterState[m->getNumSockets()];
     ServerUncoreCounterState * AfterState = new ServerUncoreCounterState[m->getNumSockets()];
@@ -1185,6 +1223,9 @@ int main(int argc, char * argv[])
     }
 
     cerr << "Update every " << delay << " seconds\n";
+
+    if (csv)
+        cerr << "Read/Write values expressed in (MB/s)" << endl;
 
     for(uint32 i=0; i<m->getNumSockets(); ++i)
         BeforeState[i] = m->getServerUncoreCounterState(i);
@@ -1213,7 +1254,8 @@ int main(int argc, char * argv[])
         if(rankA >= 0 || rankB >= 0)
           calculate_bandwidth_rank(m,BeforeState,AfterState,AfterTime-BeforeTime,csv,csvheader, no_columns, rankA, rankB);
         else
-          calculate_bandwidth(m,BeforeState,AfterState,AfterTime-BeforeTime,csv,csvheader, no_columns, metrics, show_channel_output);
+          calculate_bandwidth(m,BeforeState,AfterState,AfterTime-BeforeTime,csv,csvheader, no_columns, metrics,
+                show_channel_output, print_update);
 
         swap(BeforeTime, AfterTime);
         swap(BeforeState, AfterState);

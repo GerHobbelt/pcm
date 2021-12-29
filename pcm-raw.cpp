@@ -72,6 +72,8 @@ void print_usage(const string progname)
     cerr << "  -f    | /f                             => enforce flushing each line for interactive output\n";
     cerr << "  -i[=number] | /i[=number]              => allow to determine number of iterations\n";
     cerr << "  -tr | /tr                              => transpose output (print single event data in a row)\n";
+    cerr << "  -l                                     => use locale for printing values, calls -tab for readability\n";
+    cerr << "  -tab                                   => replace default comma separator with tab\n";
     cerr << "  -el event_list.txt | /el event_list.txt  => read event list from event_list.txt file, \n";
     cerr << "                                              each line represents an event,\n";
     cerr << "                                              event groups are separated by a semicolon\n";
@@ -117,9 +119,59 @@ void lowerCase(std::string & str)
 using namespace simdjson;
 
 std::vector<std::shared_ptr<simdjson::dom::parser> > JSONparsers;
-std::unordered_map<std::string, simdjson::dom::object> PMUEventMap;
+std::unordered_map<std::string, simdjson::dom::object> PMUEventMapJSON;
+std::vector<std::unordered_map<std::string, std::vector<std::string>>> PMUEventMapsTSV;
 std::shared_ptr<simdjson::dom::element> PMURegisterDeclarations;
 std::string eventFileLocationPrefix = ".";
+
+bool parse_tsv(const string &path) {
+    bool col_names_parsed = false;
+    int event_name_pos = -1;
+    ifstream inFile;
+    string line;
+    inFile.open(path);
+    std::unordered_map<std::string, std::vector<std::string>> PMUEventMap;
+
+    while (getline(inFile, line)) {
+        if (line.size() == 1 && line[0] == '\n')
+            continue;
+        // Trim whitespaces left/right // MOVE to utils
+        auto ws_left_count = 0;
+        for (size_t i = 0 ; i < line.size() ; i++) {
+            if (line[i] == ' ') ws_left_count++;
+            else break;
+        }
+        auto ws_right_count = 0;
+        for (size_t i = line.size() - 1 ; i > 0 ; i--) {
+            if (line[i] == ' ') ws_right_count++;
+            else break;
+        }
+        line.erase(0, ws_left_count);
+        line.erase(line.size() - ws_right_count, ws_right_count);
+        if (line[0] == '#')
+            continue;
+        if (!col_names_parsed) {
+            // Consider first row as Column name row
+            std::vector<std::string> col_names = split(line, '\t');
+            PMUEventMap["COL_NAMES"] = col_names;
+            const auto event_name_it = std::find(col_names.begin(), col_names.end(), "EventName");
+            if (event_name_it == col_names.end()) {
+                cerr << "ERROR: First row does not contain EventName\n";
+                inFile.close();
+                return false;
+            }
+            event_name_pos = event_name_it - col_names.begin();
+            col_names_parsed = true;
+            continue;
+        }
+        std::vector<std::string> entry = split(line, '\t');
+        std::string event_name = entry[event_name_pos];
+        PMUEventMap[event_name] = entry;
+    }
+    inFile.close();
+    PMUEventMapsTSV.push_back(PMUEventMap);
+    return true;
+}
 
 bool initPMUEventMap()
 {
@@ -174,7 +226,7 @@ bool initPMUEventMap()
     assert(EventTypetPos >= 0);
     const std::string ourFMS = PCM::getInstance()->getCPUFamilyModelString();
     // cout << "Our FMS: " << ourFMS << "\n";
-    std::map<std::string, std::string> eventFiles;
+    std::multimap<std::string, std::string> eventFiles;
     cout << "Matched event files:\n";
     while (std::getline(in, line))
     {
@@ -187,14 +239,14 @@ bool initPMUEventMap()
         if (std::regex_search(ourFMS.c_str(), FMSMatch, FMSRegex))
         {
             cout << tokens[FMSPos] << " " << tokens[EventTypetPos] << " " << tokens[FilenamePos] << "\n";
-            eventFiles[tokens[EventTypetPos]] = tokens[FilenamePos];
+           eventFiles.insert(std::make_pair(tokens[EventTypetPos], tokens[FilenamePos]));
         }
     }
     in.close();
 
     if (eventFiles.empty())
     {
-        cerr << "ERROR: CPU " << ourFMS << "not found in " << mapfile << "\n";
+        cerr << "ERROR: CPU " << ourFMS << " not found in " << mapfile << "\n";
         return false;
     }
 
@@ -229,22 +281,30 @@ bool initPMUEventMap()
                     return false;
                 }
 
-                JSONparsers.push_back(std::make_shared<simdjson::dom::parser>());
-                for (simdjson::dom::object eventObj : JSONparsers.back()->load(path)) {
-                    // cout << "Event ----------------\n";
-                    const std::string EventName{eventObj["EventName"].get_c_str()};
-                    if (EventName.empty())
-                    {
-                        cerr << "Did not find EventName in JSON object:\n";
-                        for (const auto keyValue : eventObj)
+                if (path.find(".json") != std::string::npos) {
+                    JSONparsers.push_back(std::make_shared<simdjson::dom::parser>());
+                    for (simdjson::dom::object eventObj : JSONparsers.back()->load(path)) {
+                        // cout << "Event ----------------\n";
+                        const std::string EventName{eventObj["EventName"].get_c_str()};
+                        if (EventName.empty())
                         {
-                            cout << "key: " << keyValue.key << " value: " << keyValue.value << "\n";
+                            cerr << "Did not find EventName in JSON object:\n";
+                            for (const auto keyValue : eventObj)
+                            {
+                                cout << "key: " << keyValue.key << " value: " << keyValue.value << "\n";
+                            }
+                        }
+                        else
+                        {
+                            PMUEventMapJSON[EventName] = eventObj;
                         }
                     }
-                    else
-                    {
-                        PMUEventMap[EventName] = eventObj;
-                    }
+                } else if (path.find(".tsv") != std::string::npos) {
+                    if (!parse_tsv(path))
+                        return false;
+                } else {
+                    cerr << "ERROR: Could not determine Event file type (JSON/TSV)\n";
+                    return false;
                 }
             }
         }
@@ -255,13 +315,91 @@ bool initPMUEventMap()
             return false;
         }
     }
-    if (PMUEventMap.empty())
+    if (PMUEventMapJSON.empty() && PMUEventMapsTSV.empty())
     {
         return false;
     }
 
     return true;
 }
+
+class EventMap {
+public:
+    static bool isEvent(const std::string &eventStr) {
+        if (PMUEventMapJSON.find(eventStr) != PMUEventMapJSON.end())
+            return true;
+        for (const auto &EventMapTSV : PMUEventMapsTSV) {
+            if (EventMapTSV.find(eventStr) != EventMapTSV.end())
+                return true;
+        }
+        return false;
+    }
+
+    static bool isField(const std::string &eventStr, const std::string event) {
+        if (PMUEventMapJSON.find(eventStr) != PMUEventMapJSON.end()) {
+            const auto eventObj = PMUEventMapJSON[eventStr];
+            const auto unitObj = eventObj[event];
+            return unitObj.error() != NO_SUCH_FIELD;
+        }
+
+        for (auto &EventMapTSV : PMUEventMapsTSV) {
+            if (EventMapTSV.find(eventStr) != EventMapTSV.end()) {
+                const auto &col_names = EventMapTSV["COL_NAMES"];
+                const auto event_name_it = std::find(col_names.begin(), col_names.end(), event);
+                if (event_name_it != col_names.end()) {
+                    const size_t event_name_pos = event_name_it - col_names.begin();
+                    return event_name_pos < EventMapTSV[eventStr].size();
+                }
+            }
+        }
+
+        return false;
+    }
+
+    static std::string getField(const std::string &eventStr, const std::string &event) {
+        std::string res;
+
+        if (PMUEventMapJSON.find(eventStr) != PMUEventMapJSON.end()) {
+            const auto eventObj = PMUEventMapJSON[eventStr];
+            const auto unitObj = eventObj[event];
+            return std::string(unitObj.get_c_str());
+        }
+
+        for (auto &EventMapTSV : PMUEventMapsTSV) {
+            if (EventMapTSV.find(eventStr) != EventMapTSV.end()) {
+                const auto col_names = EventMapTSV["COL_NAMES"];
+                const auto event_name_it = std::find(col_names.begin(), col_names.end(), event);
+                if (event_name_it != col_names.end()) {
+                    const auto event_name_pos = event_name_it - col_names.begin();
+                    res = EventMapTSV[eventStr][event_name_pos];
+                }
+            }
+        }
+        return res;
+    }
+
+    static void print_event(const std::string &eventStr) {
+        if (PMUEventMapJSON.find(eventStr) != PMUEventMapJSON.end()) {
+            const auto eventObj = PMUEventMapJSON[eventStr];
+            for (const auto & keyValue : eventObj)
+                std::cout << keyValue.key << " : " << keyValue.value << "\n";
+            return;
+        }
+
+        for (auto &EventMapTSV : PMUEventMapsTSV) {
+            if (EventMapTSV.find(eventStr) != EventMapTSV.end()) {
+                const auto &col_names = EventMapTSV["COL_NAMES"];
+                const auto event = EventMapTSV[eventStr];
+                if (EventMapTSV.find(eventStr) != EventMapTSV.end()) {
+                    for (size_t i = 0 ; i < col_names.size() ; i++)
+                        std::cout << col_names[i] << " : " << event[i] << "\n";
+                    return;
+                }
+            }
+        }
+
+    }
+};
 
 bool addEventFromDB(PCM::RawPMUConfigs& curPMUConfigs, string fullEventStr)
 {
@@ -297,7 +435,7 @@ bool addEventFromDB(PCM::RawPMUConfigs& curPMUConfigs, string fullEventStr)
         return true;
     }
 
-    if (PMUEventMap.find(eventStr) == PMUEventMap.end())
+    if (!EventMap::isEvent(eventStr))
     {
         cerr << "ERROR: event " << eventStr << " could not be found in event database. Ignoring the event.\n";
         return true;
@@ -306,7 +444,6 @@ bool addEventFromDB(PCM::RawPMUConfigs& curPMUConfigs, string fullEventStr)
     auto mod = EventTokens.begin();
     ++mod;
 
-    const auto eventObj = PMUEventMap[eventStr];
     std::string pmuName;
     PCM::RawEventConfig config = { {0,0,0,0,0}, "" };
     bool fixed = false;
@@ -337,15 +474,14 @@ bool addEventFromDB(PCM::RawPMUConfigs& curPMUConfigs, string fullEventStr)
         {std::string("qpi ll"), std::string("xpi")}
     };
 
-    const auto unitObj = eventObj["Unit"];
-    if (unitObj.error() == NO_SUCH_FIELD)
+    if (!EventMap::isField(eventStr, "Unit"))
     {
         pmuName = "core";
         config = initCoreConfig();
     }
     else
     {
-        std::string unit{ unitObj.get_c_str() };
+        std::string unit = EventMap::getField(eventStr, "Unit");
         lowerCase(unit);
         // std::cout << eventStr << " is uncore event for unit " << unit << "\n";
         pmuName = (pmuNameMap.find(unit) == pmuNameMap.end()) ? unit : pmuNameMap[unit];
@@ -356,14 +492,14 @@ bool addEventFromDB(PCM::RawPMUConfigs& curPMUConfigs, string fullEventStr)
     if (1)
     {
         // cerr << "pmuName: " << pmuName << " full event "<< fullEventStr << " \n";
-        std::string CounterStr{eventObj["Counter"].get_c_str()};
+        std::string CounterStr = EventMap::getField(eventStr, "Counter");
         // cout << "Counter: " << CounterStr << "\n";
         int fixedCounter = -1;
         fixed = (pcm_sscanf(CounterStr) >> s_expect("Fixed counter ") >> fixedCounter) ? true : false;
         bool offcore = false;
-        if (eventObj["Offcore"].error() != NO_SUCH_FIELD)
+        if (EventMap::isField(eventStr, "Offcore"))
         {
-            const std::string offcoreStr{ eventObj["Offcore"].get_c_str() };
+            const std::string offcoreStr = EventMap::getField(eventStr, "Offcore");
             offcore = (offcoreStr == "1");
         }
         if (pmuName == "core" && curPMUConfigs[pmuName].programmable.empty() && fixed == false)
@@ -408,7 +544,7 @@ bool addEventFromDB(PCM::RawPMUConfigs& curPMUConfigs, string fullEventStr)
                 const std::string fieldNameStr{ registerKeyValue.key.begin(), registerKeyValue.key.end() };
                 if (fieldNameStr == "MSRIndex")
                 {
-                    std::string fieldValueStr{ eventObj[fieldNameStr].get_c_str() };
+                    string fieldValueStr = EventMap::getField(eventStr, fieldNameStr);
                     // cout << "MSR field " << fieldNameStr << " value is " << fieldValueStr << " (" << read_number(fieldValueStr.c_str()) << ") offcore=" << offcore << "\n";
                     lowerCase(fieldValueStr);
                     if (fieldValueStr == "0" || fieldValueStr == "0x00")
@@ -428,7 +564,7 @@ bool addEventFromDB(PCM::RawPMUConfigs& curPMUConfigs, string fullEventStr)
                     }
                     // cout << " MSR field " << fieldNameStr << " value is " << MSRIndexStr << " (" << read_number(MSRIndexStr.c_str()) << ") offcore=" << offcore << "\n";
                     simdjson::dom::object MSRObject = registerKeyValue.value[MSRIndexStr];
-                    const string msrValueStr{ eventObj["MSRValue"].get_c_str() };
+                    const string msrValueStr = EventMap::getField(eventStr, "MSRValue");
                     // update the first event
                     setConfig(myPMUConfigs.empty() ? config : myPMUConfigs.front(), MSRObject, read_number(msrValueStr.c_str()), int64_t(MSRObject["Position"]));
                     // update the current as well for display
@@ -440,7 +576,7 @@ bool addEventFromDB(PCM::RawPMUConfigs& curPMUConfigs, string fullEventStr)
                 {
                     continue; // field ignored
                 }
-                if (eventObj[fieldNameStr].error() == NO_SUCH_FIELD)
+                if (!EventMap::isField(eventStr, fieldNameStr))
                 {
                     // cerr << fieldNameStr << " not found\n";
                     if (fieldDescriptionObj["DefaultValue"].error() == NO_SUCH_FIELD)
@@ -457,7 +593,8 @@ bool addEventFromDB(PCM::RawPMUConfigs& curPMUConfigs, string fullEventStr)
                 }
                 else
                 {
-                    std::string fieldValueStr{ eventObj[fieldNameStr].get_c_str() };
+                    std::string fieldValueStr = EventMap::getField(eventStr, fieldNameStr);
+
                     fieldValueStr.erase(std::remove(fieldValueStr.begin(), fieldValueStr.end(), '\"'), fieldValueStr.end());
                     if (offcore && fieldNameStr == "EventCode")
                     {
@@ -577,10 +714,7 @@ bool addEventFromDB(PCM::RawPMUConfigs& curPMUConfigs, string fullEventStr)
         catch (std::exception& e)
         {
             cerr << "Error while setting a register field for event " << fullEventStr << " : " << e.what() << "\n";
-            for (const auto & keyValue : eventObj)
-            {
-                std::cout << keyValue.key << " : " << keyValue.value << "\n";
-            }
+            EventMap::print_event(eventStr);
             return false;
         }
     }
@@ -734,11 +868,12 @@ bool show_partial_core_output = false;
 bitset<MAX_CORES> ycores;
 bool flushLine = false;
 bool transpose = false;
+std::string separator = ",";
 
 void printRowBegin(const std::string & EventName, const CoreCounterState & BeforeState, const CoreCounterState & AfterState, PCM* m)
 {
     printDateForCSV(CsvOutputType::Data);
-    cout << EventName << "," << (1000ULL * getInvariantTSC(BeforeState, AfterState)) / m->getNominalFrequency() << "," << getInvariantTSC(BeforeState, AfterState);
+    cout << EventName << separator << (1000ULL * getInvariantTSC(BeforeState, AfterState)) / m->getNominalFrequency() << separator << getInvariantTSC(BeforeState, AfterState);
 }
 
 
@@ -750,7 +885,7 @@ void printRow(const std::string & EventName, MetricFunc metricFunc, const std::v
     {
         if (!(m->isCoreOnline(core) == false || (show_partial_core_output && ycores.test(core) == false)))
         {
-            cout << "," << metricFunc(BeforeState[core], AfterState[core]);
+            cout << separator << metricFunc(BeforeState[core], AfterState[core]);
         }
     }
     cout << "\n";
@@ -788,7 +923,7 @@ void printTransposed(const PCM::RawPMUConfigs& curPMUConfigs, PCM* m, vector<Cor
                     {
                         for (uint32 u = 0; u < maxUnit; ++u)
                         {
-                            cout << "," << fixedMetricFunc(u, BeforeUncoreState[s], AfterUncoreState[s]);
+                            cout << separator << fixedMetricFunc(u, BeforeUncoreState[s], AfterUncoreState[s]);
                         }
                     }
                     cout << "\n";
@@ -802,7 +937,7 @@ void printTransposed(const PCM::RawPMUConfigs& curPMUConfigs, PCM* m, vector<Cor
                     {
                         for (uint32 u = 0; u < maxUnit; ++u)
                         {
-                            cout << "," << metricFunc(u, i, BeforeUncoreState[s], AfterUncoreState[s]);
+                            cout << separator << metricFunc(u, i, BeforeUncoreState[s], AfterUncoreState[s]);
                         }
                     }
                     cout << "\n";
@@ -877,6 +1012,10 @@ void printTransposed(const PCM::RawPMUConfigs& curPMUConfigs, PCM* m, vector<Cor
             {
                 printUncoreRows([](const uint32 u, const uint32 i, const ServerUncoreCounterState& before, const ServerUncoreCounterState& after) { return getCBOCounter(u, i, before, after); }, (uint32)m->getMaxNumOfCBoxes());
             }
+            else if (type == "irp")
+            {
+                printUncoreRows([](const uint32 u, const uint32 i, const ServerUncoreCounterState& before, const ServerUncoreCounterState& after) { return getIRPCounter(u, i, before, after); }, (uint32)m->getMaxNumOfIIOStacks());
+            }
             else if (type == "iio")
             {
                 printUncoreRows([](const uint32 u, const uint32 i, const ServerUncoreCounterState& before, const ServerUncoreCounterState& after) { return getIIOCounter(u, i, before, after); }, (uint32)m->getMaxNumOfIIOStacks());
@@ -900,13 +1039,13 @@ void print(const PCM::RawPMUConfigs& curPMUConfigs, PCM* m, vector<CoreCounterSt
         printTransposed(curPMUConfigs, m, BeforeState, AfterState, BeforeUncoreState, AfterUncoreState, outputType);
         return;
     }
-    printDateForCSV(outputType);
+    printDateForCSV(outputType, separator);
     if (BeforeState.size() > 0 && AfterState.size() > 0)
     {
         choose(outputType,
-            []() { cout << ","; },
-            []() { cout << "ms,"; },
-            [&]() { cout << (1000ULL * getInvariantTSC(BeforeState[0], AfterState[0])) / m->getNominalFrequency() << ","; });
+            []() { cout << separator; },
+            []() { cout << "ms" << separator; },
+            [&]() { cout << (1000ULL * getInvariantTSC(BeforeState[0], AfterState[0])) / m->getNominalFrequency() << separator; });
     }
     for (auto typeEvents : curPMUConfigs)
     {
@@ -937,9 +1076,9 @@ void print(const PCM::RawPMUConfigs& curPMUConfigs, PCM* m, vector<CoreCounterSt
                     auto print = [&](const std::string & metric, const uint64 value)
                     {
                         choose(outputType,
-                            [m, core]() { cout << "SKT" << m->getSocketId(core) << "CORE" << core << ","; },
-                            [&metric]() { cout << metric << ","; },
-                            [&value]() { cout << value << ","; });
+                            [m, core]() { cout << "SKT" << m->getSocketId(core) << "CORE" << core << separator; },
+                            [&metric]() { cout << metric << separator; },
+                            [&value]() { cout << value << separator; });
                     };
                     for (uint32 cnt = 0; cnt < 4; ++cnt)
                     {
@@ -960,9 +1099,9 @@ void print(const PCM::RawPMUConfigs& curPMUConfigs, PCM* m, vector<CoreCounterSt
                 for (auto event : events)
                 {
                     choose(outputType,
-                        [m, core]() { cout << "SKT" << m->getSocketId(core) << "CORE" << core << ","; },
-                        [&event, &i]() { if (event.second.empty()) cout << "COREEvent" << i << ",";  else cout << event.second << ","; },
-                        [&]() { cout << getNumberOfCustomEvents(i, BeforeState[core], AfterState[core]) << ","; });
+                        [m, core]() { cout << "SKT" << m->getSocketId(core) << "CORE" << core << separator; },
+                        [&event, &i]() { if (event.second.empty()) cout << "COREEvent" << i << separator;  else cout << event.second << separator; },
+                        [&]() { cout << getNumberOfCustomEvents(i, BeforeState[core], AfterState[core]) << separator; });
                     ++i;
                 }
             }
@@ -977,9 +1116,9 @@ void print(const PCM::RawPMUConfigs& curPMUConfigs, PCM* m, vector<CoreCounterSt
                     for (auto event : events)
                     {
                         choose(outputType,
-                            [s, l]() { cout << "SKT" << s << "LINK" << l << ","; },
-                            [&event, &i]() { if (event.second.empty()) cout << "M3UPIEvent" << i << ",";  else cout << event.second << ","; },
-                            [&]() { cout << getM3UPICounter(l, i, BeforeUncoreState[s], AfterUncoreState[s]) << ","; });
+                            [s, l]() { cout << "SKT" << s << "LINK" << l << separator; },
+                            [&event, &i]() { if (event.second.empty()) cout << "M3UPIEvent" << i << separator;  else cout << event.second << separator; },
+                            [&]() { cout << getM3UPICounter(l, i, BeforeUncoreState[s], AfterUncoreState[s]) << separator; });
                         ++i;
                     }
                 }
@@ -995,9 +1134,9 @@ void print(const PCM::RawPMUConfigs& curPMUConfigs, PCM* m, vector<CoreCounterSt
                     for (auto event : events)
                     {
                         choose(outputType,
-                            [s, l]() { cout << "SKT" << s << "LINK" << l << ","; },
-                            [&event, &i]() { if (event.second.empty()) cout << "XPIEvent" << i << ",";  else cout << event.second << ","; },
-                            [&]() { cout << getXPICounter(l, i, BeforeUncoreState[s], AfterUncoreState[s]) << ","; });
+                            [s, l]() { cout << "SKT" << s << "LINK" << l << separator; },
+                            [&event, &i]() { if (event.second.empty()) cout << "XPIEvent" << i << separator;  else cout << event.second << separator; },
+                            [&]() { cout << getXPICounter(l, i, BeforeUncoreState[s], AfterUncoreState[s]) << separator; });
                         ++i;
                     }
                 }
@@ -1012,17 +1151,17 @@ void print(const PCM::RawPMUConfigs& curPMUConfigs, PCM* m, vector<CoreCounterSt
                     if (fixedEvents.size())
                     {
                         choose(outputType,
-                            [s, ch]() { cout << "SKT" << s << "CHAN" << ch << ","; },
-                            [&fixedEvents]() { cout << "DRAMClocks" << fixedEvents[0].second << ","; },
-                            [&]() { cout << getDRAMClocks(ch, BeforeUncoreState[s], AfterUncoreState[s]) << ","; });
+                            [s, ch]() { cout << "SKT" << s << "CHAN" << ch << separator; },
+                            [&fixedEvents]() { cout << "DRAMClocks" << fixedEvents[0].second << separator; },
+                            [&]() { cout << getDRAMClocks(ch, BeforeUncoreState[s], AfterUncoreState[s]) << separator; });
                     }
                     int i = 0;
                     for (auto event : events)
                     {
                         choose(outputType,
-                            [s, ch]() { cout << "SKT" << s << "CHAN" << ch << ","; },
-                            [&event, &i]() { if (event.second.empty()) cout << "IMCEvent" << i << ",";  else cout << event.second << ","; },
-                            [&]() { cout << getMCCounter(ch, i, BeforeUncoreState[s], AfterUncoreState[s]) << ","; });
+                            [s, ch]() { cout << "SKT" << s << "CHAN" << ch << separator; },
+                            [&event, &i]() { if (event.second.empty()) cout << "IMCEvent" << i << separator;  else cout << event.second << separator; },
+                            [&]() { cout << getMCCounter(ch, i, BeforeUncoreState[s], AfterUncoreState[s]) << separator; });
                         ++i;
                     }
                 }
@@ -1038,9 +1177,9 @@ void print(const PCM::RawPMUConfigs& curPMUConfigs, PCM* m, vector<CoreCounterSt
                     for (auto event : events)
                     {
                         choose(outputType,
-                            [s, mc]() { cout << "SKT" << s << "MC" << mc << ","; },
-                            [&event, &i]() { if (event.second.empty()) cout << "M2MEvent" << i << ",";  else cout << event.second << ","; },
-                            [&]() { cout << getM2MCounter(mc, i, BeforeUncoreState[s], AfterUncoreState[s]) << ","; });
+                            [s, mc]() { cout << "SKT" << s << "MC" << mc << separator; },
+                            [&event, &i]() { if (event.second.empty()) cout << "M2MEvent" << i << separator;  else cout << event.second << separator; },
+                            [&]() { cout << getM2MCounter(mc, i, BeforeUncoreState[s], AfterUncoreState[s]) << separator; });
                         ++i;
                     }
                 }
@@ -1054,9 +1193,9 @@ void print(const PCM::RawPMUConfigs& curPMUConfigs, PCM* m, vector<CoreCounterSt
                 for (auto event : events)
                 {
                     choose(outputType,
-                        [s]() { cout << "SKT" << s << ","; },
-                        [&event, &i]() { if (event.second.empty()) cout << "PCUEvent" << i << ",";  else cout << event.second << ","; },
-                        [&]() { cout << getPCUCounter(i, BeforeUncoreState[s], AfterUncoreState[s]) << ","; });
+                        [s]() { cout << "SKT" << s << separator; },
+                        [&event, &i]() { if (event.second.empty()) cout << "PCUEvent" << i << separator;  else cout << event.second << separator; },
+                        [&]() { cout << getPCUCounter(i, BeforeUncoreState[s], AfterUncoreState[s]) << separator; });
                     ++i;
                 }
             }
@@ -1068,17 +1207,17 @@ void print(const PCM::RawPMUConfigs& curPMUConfigs, PCM* m, vector<CoreCounterSt
                 if (fixedEvents.size())
                 {
                     choose(outputType,
-                        [s]() { cout << "SKT" << s << ","; },
-                        [&fixedEvents]() { cout << "UncoreClocks" << fixedEvents[0].second << ","; },
-                        [&]() { cout << getUncoreClocks(BeforeUncoreState[s], AfterUncoreState[s]) << ","; });
+                        [s]() { cout << "SKT" << s << separator; },
+                        [&fixedEvents]() { cout << "UncoreClocks" << fixedEvents[0].second << separator; },
+                        [&]() { cout << getUncoreClocks(BeforeUncoreState[s], AfterUncoreState[s]) << separator; });
                 }
                 int i = 0;
                 for (auto event : events)
                 {
                     choose(outputType,
-                        [s]() { cout << "SKT" << s << ","; },
-                        [&event, &i]() { if (event.second.empty()) cout << "UBOXEvent" << i << ",";  else cout << event.second << ","; },
-                        [&]() { cout << getUBOXCounter(i, BeforeUncoreState[s], AfterUncoreState[s]) << ","; });
+                        [s]() { cout << "SKT" << s << separator; },
+                        [&event, &i]() { if (event.second.empty()) cout << "UBOXEvent" << i << separator;  else cout << event.second << separator; },
+                        [&]() { cout << getUBOXCounter(i, BeforeUncoreState[s], AfterUncoreState[s]) << separator; });
                     ++i;
                 }
             }
@@ -1093,9 +1232,27 @@ void print(const PCM::RawPMUConfigs& curPMUConfigs, PCM* m, vector<CoreCounterSt
                     for (auto event : events)
                     {
                         choose(outputType,
-                            [s, cbo]() { cout << "SKT" << s << "C" << cbo << ","; },
-                            [&event, &i]() { if (event.second.empty()) cout << "CBOEvent" << i << ",";  else cout << event.second << ","; },
-                            [&]() { cout << getCBOCounter(cbo, i, BeforeUncoreState[s], AfterUncoreState[s]) << ","; });
+                            [s, cbo]() { cout << "SKT" << s << "C" << cbo << separator; },
+                            [&event, &i]() { if (event.second.empty()) cout << "CBOEvent" << i << separator;  else cout << event.second << separator; },
+                            [&]() { cout << getCBOCounter(cbo, i, BeforeUncoreState[s], AfterUncoreState[s]) << separator; });
+                        ++i;
+                    }
+                }
+            }
+        }
+        else if (type == "irp")
+        {
+            for (uint32 s = 0; s < m->getNumSockets(); ++s)
+            {
+                for (uint32 stack = 0; stack < m->getMaxNumOfIIOStacks(); ++stack)
+                {
+                    int i = 0;
+                    for (auto event : events)
+                    {
+                        choose(outputType,
+                            [s, stack]() { cout << "SKT" << s << "IRP" << stack << separator; },
+                            [&event, &i]() { if (event.second.empty()) cout << "IRPEvent" << i << separator;  else cout << event.second << separator; },
+                            [&]() { cout << getIRPCounter(stack, i, BeforeUncoreState[s], AfterUncoreState[s]) << separator; });
                         ++i;
                     }
                 }
@@ -1111,9 +1268,9 @@ void print(const PCM::RawPMUConfigs& curPMUConfigs, PCM* m, vector<CoreCounterSt
                     for (auto event : events)
                     {
                         choose(outputType,
-                            [s, stack]() { cout << "SKT" << s << "IIO" << stack << ","; },
-                            [&event, &i]() { if (event.second.empty()) cout << "IIOEvent" << i << ",";  else cout << event.second << ","; },
-                            [&]() { cout << getIIOCounter(stack, i, BeforeUncoreState[s], AfterUncoreState[s]) << ","; });
+                            [s, stack]() { cout << "SKT" << s << "IIO" << stack << separator; },
+                            [&event, &i]() { if (event.second.empty()) cout << "IIOEvent" << i << separator;  else cout << event.second << separator; },
+                            [&]() { cout << getIIOCounter(stack, i, BeforeUncoreState[s], AfterUncoreState[s]) << separator; });
                         ++i;
                     }
                 }
@@ -1206,6 +1363,15 @@ int main(int argc, char* argv[])
             strncmp(*argv, "/tr", 3) == 0)
         {
             transpose = true;
+            continue;
+        }
+        else if (strncmp(*argv, "-l", 2) == 0) {
+            std::cout.imbue(std::locale(""));
+            separator = "\t";
+            continue;
+        }
+        else if (strncmp(*argv, "-tab", 4) == 0) {
+            separator = "\t";
             continue;
         }
         else if (strncmp(*argv, "--yescores", 10) == 0 ||
@@ -1312,12 +1478,21 @@ int main(int argc, char* argv[])
     {
         if (!group.empty()) ++nGroups;
     }
+    for (size_t i = 0; i < PMUConfigs.size(); ++i)
+    {
+        if (PMUConfigs[i].empty())
+        {   // erase empty groups
+            PMUConfigs.erase(PMUConfigs.begin() + i);
+            --i;
+        }
+    }
+    assert(PMUConfigs.size() == nGroups);
     if (nGroups == 0)
     {
         cout << "No events specified. Exiting.\n";
         exit(EXIT_FAILURE);
     }
-    cout << "Collecting " << nGroups << " event groups\n";
+    cout << "Collecting " << nGroups << " event group(s)\n";
 
     if (nGroups > 1)
     {
@@ -1328,28 +1503,7 @@ int main(int argc, char* argv[])
     auto programPMUs = [&m](const PCM::RawPMUConfigs & config)
     {
         PCM::ErrorCode status = m->program(config, true);
-        switch (status)
-        {
-        case PCM::Success:
-            break;
-        case PCM::MSRAccessDenied:
-            cerr << "Access to Processor Counter Monitor has denied (no MSR or PCI CFG space access).\n";
-            exit(EXIT_FAILURE);
-        case PCM::PMUBusy:
-            cerr << "Access to Processor Counter Monitor has denied (Performance Monitoring Unit is occupied by other application). Try to stop the application that uses PMU.\n";
-            cerr << "Alternatively you can try to reset PMU configuration at your own risk. Try to reset? (y/n)\n";
-            char yn;
-            std::cin >> yn;
-            if ('y' == yn)
-            {
-                m->resetPMU();
-                cerr << "PMU configuration has been reset. Try to rerun the program again.\n";
-            }
-            exit(EXIT_FAILURE);
-        default:
-            cerr << "Access to Processor Counter Monitor has denied (Unknown error).\n";
-            exit(EXIT_FAILURE);
-        }
+        m->checkError(status);
     };
 
     SystemCounterState SysBeforeState, SysAfterState;
@@ -1380,20 +1534,34 @@ int main(int argc, char* argv[])
         MySystem(sysCmd, sysArgv);
     }
 
+    auto programAndReadGroup = [&](const PCM::RawPMUConfigs & group)
+    {
+        if (forceRTMAbortMode)
+        {
+            m->enableForceRTMAbortMode(true);
+        }
+        programPMUs(group);
+        m->getAllCounterStates(SysBeforeState, DummySocketStates, BeforeState);
+        for (uint32 s = 0; s < m->getNumSockets(); ++s)
+        {
+            BeforeUncoreState[s] = m->getServerUncoreCounterState(s);
+        }
+    };
+
+    if (nGroups == 1)
+    {
+        programAndReadGroup(PMUConfigs[0]);
+    }
+
     mainLoop([&]()
     {
-         for (const auto group : PMUConfigs)
+         for (const auto & group : PMUConfigs)
          {
                 if (group.empty()) continue;
-                if (forceRTMAbortMode)
+
+                if (nGroups > 1)
                 {
-                    m->enableForceRTMAbortMode(true);
-                }
-                programPMUs(group);
-                m->getAllCounterStates(SysBeforeState, DummySocketStates, BeforeState);
-                for (uint32 s = 0; s < m->getNumSockets(); ++s)
-                {
-                    BeforeUncoreState[s] = m->getServerUncoreCounterState(s);
+                    programAndReadGroup(group);
                 }
 
                 calibratedSleep(delay, sysCmd, mainLoop, m);
@@ -1408,7 +1576,15 @@ int main(int argc, char* argv[])
                 //cout << "Called sleep function for " << dec << fixed << delay_ms << " ms\n";
 
                 printAll(group, m, BeforeState, AfterState, BeforeUncoreState, AfterUncoreState);
-                m->cleanup(true);
+                if (nGroups > 1)
+                {
+                    m->cleanup(true);
+                }
+                else
+                {
+                    std::swap(BeforeState, AfterState);
+                    std::swap(BeforeUncoreState, AfterUncoreState);
+                }
          }
          if (m->isBlocked()) {
              // in case PCM was blocked after spawning child application: break monitoring loop here

@@ -83,6 +83,7 @@ class Indent {
         }
         Indent() = delete;
         Indent(Indent const &) = default;
+        Indent & operator = (Indent const &) = default;
         ~Indent() = default;
 
         friend std::stringstream& operator <<( std::stringstream& stream, Indent in );
@@ -122,11 +123,15 @@ class datetime {
     public:
         datetime() {
             std::time_t t = std::time( nullptr );
-            now = *(std::gmtime( &t ));
+            const auto gt = std::gmtime( &t );
+            if (gt == nullptr)
+                throw std::runtime_error("std::gmtime returned nullptr");
+            now = *gt;
         }
         datetime( std::tm t ) : now( t ) {}
         ~datetime() = default;
         datetime( datetime const& ) = default;
+	datetime & operator = ( datetime const& ) = default;
 
     public:
         void printDateTimeString( std::ostream& os ) const {
@@ -168,11 +173,14 @@ class date {
         }
         ~date() = default;
         date( date const& ) = default;
+	date & operator = ( date const& ) = default;
 
     public:
         void printDate( std::ostream& os ) const {
             char buf[64];
-            std::strftime( buf, 64, "%F", std::localtime(&now) );
+	    const auto t = std::localtime(&now);
+	    assert(t);
+            std::strftime( buf, 64, "%F", t);
             os << buf;
         }
 
@@ -282,6 +290,7 @@ public:
     }
 
     JSONPrinter( JSONPrinter const & ) = delete;
+    JSONPrinter & operator = ( JSONPrinter const & ) = delete;
     JSONPrinter() = delete;
 
     CoreCounterState const getCoreCounter( std::shared_ptr<Aggregator> ag, uint32 tid ) const {
@@ -541,6 +550,7 @@ public:
     }
 
     PrometheusPrinter( PrometheusPrinter const & ) = delete;
+    PrometheusPrinter & operator = ( PrometheusPrinter const & ) = delete;
     PrometheusPrinter() = delete;
 
     CoreCounterState const getCoreCounter( std::shared_ptr<Aggregator> ag, uint32 tid ) const {
@@ -740,7 +750,7 @@ private:
         if (hierarchy_.size() == 0 )
             return s;
         s = "{";
-        for( auto level : hierarchy_ ) {
+        for(const auto & level : hierarchy_ ) {
             s += level + ',';
         }
         s.pop_back();
@@ -853,7 +863,8 @@ protected:
         }
         else {
             while( 1 ) {
-                // FIXME: openSSL has no support for setting the MSG_NOSIGNAL during send
+                // openSSL has no support for setting the MSG_NOSIGNAL during send
+                // but we ignore sigpipe so we should be fine
                 bytesSent = SSL_write( ssl_, (void*)outputBuffer_, bytesToSend );
                 if ( 0 >= bytesSent ) {
                     int sslError = SSL_get_error( ssl_, bytesSent );
@@ -862,7 +873,7 @@ protected:
                         case SSL_ERROR_WANT_WRITE:
                             // retry
                             continue; // Should continue in the while loop and attempt to write again
-                            break;
+//                            break;
                         case SSL_ERROR_ZERO_RETURN:
                         case SSL_ERROR_SYSCALL:
                         case SSL_ERROR_SSL:
@@ -1056,7 +1067,8 @@ public:
     }
 
     void close() {
-        ::close( socketBuffer_.socket() );
+        const auto s = socketBuffer_.socket();
+        if (s != -1) ::close(s);
         socketBuffer_.setSocket( 0 );
     }
 
@@ -1070,7 +1082,7 @@ typedef basic_socketstream<wchar_t> wsocketstream;
 class Server {
 public:
     Server() = delete;
-    Server( std::string listenIP, uint16_t port ) noexcept( false ) : listenIP_(listenIP), port_( port ) {
+    Server( const std::string & listenIP, uint16_t port ) noexcept( false ) : listenIP_(listenIP), port_( port ) {
         serverSocket_ = initializeServerSocket();
         SignalHandler* shi = SignalHandler::getInstance();
         shi->setSocket( serverSocket_ );
@@ -1079,6 +1091,7 @@ public:
         shi->installHandler( SignalHandler::handleSignal, SIGINT );
     }
     Server( Server const & ) = delete;
+    Server & operator = ( Server const & ) = delete;
     virtual ~Server() = default;
 
 public:
@@ -1102,7 +1115,10 @@ private:
             serv.sin_addr.s_addr = INADDR_ANY;
         else {
             if ( 1 != ::inet_pton( AF_INET, listenIP_.c_str(), &(serv.sin_addr) ) )
+            {
+                ::close(sockfd);
                 throw std::runtime_error( "Server Constructor: Cannot convert IP string" );
+            }
         }
         socklen_t len = sizeof( struct sockaddr_in );
         retval = ::bind( sockfd, reinterpret_cast<struct sockaddr*>(&serv), len );
@@ -1121,7 +1137,7 @@ private:
     }
 
 protected:
-    std::string& listenIP_;
+    std::string  listenIP_;
     WorkQueue    wq_;
     int          serverSocket_;
     uint16_t     port_;
@@ -1371,16 +1387,18 @@ public:
     }
 
 private:
-    // FIXME: Incomplete, needs adding to
+    // Contains most if not all headers from RFC2616 RFC7230 and RFC7231
+    // This is a mix of request and response headers!
+    // Please add if you find that headers are missing
     std::vector<HTTPHeaderProperty> const httpHeaderProperties = {
-        { "Accept", HeaderType::String, true, true, ',' },
-        { "Accept-Charset", HeaderType::String, true, true, ',' },
-        { "Accept-Encoding", HeaderType::String, true, true, ',' },
-        { "Accept-Language", HeaderType::String, true, true, ',' },
+        { "Accept", HeaderType::String, true, true },
+        { "Accept-Charset", HeaderType::String, true, true },
+        { "Accept-Encoding", HeaderType::String, true, true },
+        { "Accept-Language", HeaderType::String, true, true },
         { "Accept-Ranges", HeaderType::String, false, false },
         { "Access-Control-Allow-Credentials", HeaderType::True, false, false },
-        { "Access-Control-Allow-Headers", HeaderType::String, false, true, ',' },
-        { "Access-Control-Allow-Methods", HeaderType::String, false, true, ',' },
+        { "Access-Control-Allow-Headers", HeaderType::String, false, true },
+        { "Access-Control-Allow-Methods", HeaderType::String, false, true },
         { "Access-Control-Allow-Origin", HeaderType::StarOrFQURL, false, false },
         { "Access-Control-Expose-Headers", HeaderType::String, false, true },
         { "Access-Control-Max-Age", HeaderType::Integer, false, false },
@@ -1436,7 +1454,7 @@ private:
         { "Strict-Transport-Security",  HeaderType::Parameters, false, false },
         { "TE", HeaderType::String, true, true },
         { "Tk", HeaderType::Character, false, false },
-        { "Trailer", HeaderType::ContainsOtherHeaders, false, false, ',' },
+        { "Trailer", HeaderType::ContainsOtherHeaders, false, false },
         { "Transfer-Encoding", HeaderType::String, false, true },
         { "Upgrade-Insecure-Requests", HeaderType::Integer },
         { "User-Agent", HeaderType::String, false, false },
@@ -1451,10 +1469,12 @@ private:
         { "X-Forwarded-Proto", HeaderType::String, false, false },
         { "X-Frame-Options", HeaderType::String, false, false },
         { "X-XSS-Protection", HeaderType::String, false, false }
-//        { "",  HeaderType:: , , },
+//        { "",  HeaderType:: , , }, // Default LCS is ',', no need to add it
     };
 };
 
+// This URL class tries to follow RFC 3986
+// the updates in 6874 and 8820 are not taken into account
 struct URL {
 public:
     URL() : scheme_( "" ), user_( "" ), passwd_( "" ), host_( "" ), path_( "" ), fragment_( "" ), port_( 0 ),
@@ -1464,7 +1484,55 @@ public:
     ~URL() = default;
     URL& operator=( URL const & ) = default;
 
+private:
+    int charToNumber( std::string::value_type c ) const {
+        if ( 'A' <= c && 'F' >= c )
+            return (int)(c - 'A') + 10;
+        if ( 'a' <= c && 'f' >= c )
+            return (int)(c - 'a') + 10;
+        if ( '0' <= c && '9' >= c )
+            return (int)(c - '0');
+	std::stringstream s;
+	s << "'" << c << "' is not a hexadecimal digit!";
+        throw std::runtime_error( s.str() );
+    }
 public:
+    // Following https://en.wikipedia.org/wiki/Percent-encoding
+    std::string percentEncode( const std::string& s ) const {
+        std::stringstream r;
+        for ( std::string::value_type c : s ) {
+            // skip alpha and unreserved characters
+            if ( isalnum( c ) || '-' == c || '_' == c || '.' == c || '~' == c ) {
+                r << c;
+                continue;
+            }
+            r << '%' << std::setw(2) << std::uppercase << std::hex << int( (unsigned char)c ) << std::nouppercase;
+        }
+        return r.str();
+    }
+
+    std::string percentDecode( const std::string& s ) const {
+        std::stringstream r;
+        // cppcheck-suppress StlMissingComparison
+        for ( std::string::const_iterator ci = s.begin(); ci != s.end(); ++ci ) {
+            std::string::value_type c = *ci;
+            int n = 0;
+            if ( '%' == c ) {
+                if ( ++ci == s.end() )
+                    throw std::runtime_error( "Malformed URL, percent found but no next char" );
+                n += charToNumber(*ci);
+                n *= 16;
+                if ( ++ci == s.end() )
+                    throw std::runtime_error( "Malformed URL, percent found but no next next char" ); // better error message needed :-)
+                n += charToNumber(*ci);
+                r << (unsigned char)n;
+                continue;
+            }
+            r << c;
+        }
+        return r.str();
+    }
+
     static URL parse( std::string fullURL ) {
         DBG( 3, "fullURL: '", fullURL, "'" );
         URL url;
@@ -1530,7 +1598,7 @@ public:
                         userEndPos = passwdColonPos;
                         DBG( 3, "2a userEndPos '", userEndPos, "'" );
                         // passwd is possibly percent encoded FIXME
-                        url.passwd_ = passwd;
+                        url.passwd_ = url.percentDecode( passwd );
                         url.hasPasswd_ = true;
                     } else {
                         userEndPos = atPos;
@@ -1540,7 +1608,7 @@ public:
                     std::string user = authority.substr( 0, userEndPos );
                     DBG( 3, "user: '", user, "'" );
                     // user is possibly percent encoded FIXME
-                    url.user_ = user;
+                    url.user_ = url.percentDecode( user );
                     url.hasUser_ = true;
                     // delete user/pass including the at
                     authority.erase( 0, atPos+1 );
@@ -1556,7 +1624,7 @@ public:
                     angleBracketClosePos = authority.find( ']', 0 );
                     angleBracketCloseFound = (angleBracketClosePos != std::string::npos);
                     if ( !angleBracketCloseFound )
-                        throw std::runtime_error( "No matching  ']' found." );
+                        throw std::runtime_error( "No matching IPv6 ']' found." );
                     url.host_ = authority.substr( 0, angleBracketClosePos );
                     url.hasHost_ = true;
                     DBG( 3, "angleBracketCloseFound: host: '", url.host_, "'" );
@@ -1616,6 +1684,7 @@ public:
 
         if ( std::string::npos != questionMarkPos ) {
             url.hasQuery_ = true;
+	    // Why am i not checking numberPos for validity?
             std::string queryString = fullURL.substr( questionMarkPos+1, numberPos-(questionMarkPos+1) );
             DBG( 3, "queryString: '", queryString, "'" );
             size_t ampPos = 0;
@@ -1627,9 +1696,9 @@ public:
                 if ( std::string::npos == equalsPos )
                     throw std::runtime_error( "Did not find a '=' in the query" );
                 std::string one, two;
-                one = query.substr( 0, equalsPos );
+                one = url.percentDecode( query.substr( 0, equalsPos ) );
                 DBG( 3, "one: '", one, "'" );
-                two = query.substr( equalsPos+1 );
+                two = url.percentDecode( query.substr( equalsPos+1 ) );
                 DBG( 3, "two: '", two, "'" );
                 url.arguments_.push_back( std::make_pair( one ,two ) );
                 // npos + 1 == 0... ouch
@@ -1649,7 +1718,8 @@ public:
         // Now make sure the URL does not contain %xx values
         size_t percentPos = url.path_.find( '%' );
         if ( std::string::npos != percentPos ) {
-            // FIXME: implement conversion from percent encoded to ascii
+            // throwing an error mentioning a dev issue
+            throw std::runtime_error( std::string("DEV: Some URL component still contains percent encoded values, please report the URL: ") + url.path_ );
         }
 
         // Done!
@@ -1668,11 +1738,11 @@ public:
             ss << "//";
             DBG( 3, " hasUser_: ", hasUser_, ", user_: ", user_ );
             if ( hasUser_ ) {
-                ss << user_;
+                ss << percentEncode( user_ );
             }
             DBG( 3, " hasPasswd_: ", hasPasswd_, ", passwd_: ", passwd_ );
             if ( hasPasswd_ ) {
-                ss << ':' << passwd_;
+                ss << ':' << percentEncode( passwd_ );
             }
             DBG( 3, " hasUser_: ", hasUser_, ", user_: ", user_ );
             if ( hasUser_ ) {
@@ -1695,10 +1765,10 @@ public:
             size_t i;
             for ( i = 0; i < (arguments_.size()-1); ++i ) {
                 DBG( 3, " query[", i, "]: ", arguments_[i].first, " ==> ", arguments_[i].second );
-                ss << arguments_[i].first << '=' << arguments_[i].second << "&";
+                ss << percentEncode( arguments_[i].first ) << '=' << percentEncode( arguments_[i].second ) << "&";
             }
             DBG( 3, " query[", i, "]: ", arguments_[i].first, " ==> ", arguments_[i].second );
-            ss << arguments_[i].first << '=' << arguments_[i].second;
+            ss << percentEncode( arguments_[i].first ) << '=' << percentEncode( arguments_[i].second );
         }
         if ( hasFragment_ ) {
             DBG( 3, " hasFragment_: ", hasFragment_, ", fragment_: ", fragment_ );
@@ -1909,6 +1979,7 @@ class HTTPMessage {
 protected:
     HTTPMessage() = default;
     HTTPMessage( HTTPMessage const & ) = default;
+    HTTPMessage & operator = ( HTTPMessage const & ) = default;
     ~HTTPMessage() = default;
 
 public:
@@ -2040,6 +2111,7 @@ class HTTPRequest : public HTTPMessage {
 public:
     HTTPRequest() : method_( HTTPRequestMethod::GET ) {}
     HTTPRequest( HTTPRequest const & ) = default;
+    HTTPRequest & operator = ( HTTPRequest const & ) = default;
     ~HTTPRequest() = default;
 
     template <typename CharT, typename Traits>
@@ -2073,6 +2145,7 @@ class HTTPResponse : public HTTPMessage {
 public:
     HTTPResponse() : responseCode_( HTTPResponseCode::RC_200_OK ) {}
     HTTPResponse( HTTPResponse const & ) = default;
+    HTTPResponse & operator = ( HTTPResponse const & ) = default;
     virtual ~HTTPResponse() = default;
 
     template <typename CharT, typename Traits>
@@ -2530,6 +2603,7 @@ public:
     }
 
     HTTPServer( HTTPServer const & ) = delete;
+    HTTPServer & operator = ( HTTPServer const & ) = delete;
 
     virtual ~HTTPServer() {
         pcf_->stop();
@@ -2622,6 +2696,7 @@ void PeriodicCounterFetcher::execute() {
             auto before = steady_clock::now();
             // create an aggregator
             std::shared_ptr<Aggregator> sagp = std::make_shared<Aggregator>();
+            assert(sagp.get());
             DBG( 2, "PCF::execute(): AGP=", sagp.get(), " )" );
             // dispatch it
             sagp->dispatch( PCM::getInstance()->getSystemTopology() );
@@ -2663,11 +2738,12 @@ void HTTPServer::run() {
         int port = ntohs( clientAddress.sin_port );
         DBG( 3, "Client IP is: ", ipbuf, ", and the port it uses is : ", port );
 
-        HTTPConnection* connection;
+        HTTPConnection* connection = nullptr;
         try {
             connection = new HTTPConnection( this, clientSocketFD, clientAddress, callbackList_ );
         } catch ( std::exception& e ) {
             DBG( 3, "Exception caught while creating a HTTPConnection: " );
+	    if (connection) delete connection;
             ::close( clientSocketFD );
             continue;
         }
@@ -2776,6 +2852,7 @@ inline constexpr signed char operator "" _uc( unsigned long long arg ) noexcept 
 std::pair<std::shared_ptr<Aggregator>,std::shared_ptr<Aggregator>> getNullAndCurrentAggregator() {
     std::shared_ptr<Aggregator> current = std::make_shared<Aggregator>();
     std::shared_ptr<Aggregator> null    = std::make_shared<Aggregator>();
+    assert(current.get());
     current->dispatch( PCM::getInstance()->getSystemTopology() );
     return std::make_pair( null, current );
 }
@@ -3047,6 +3124,7 @@ void printHelpText( std::string const & programName ) {
     std::cerr << "    -h|--help            : This information\n";
 }
 
+#if not defined( UNIT_TEST )
 /* Main */
 int main( int argc, char* argv[] ) {
     // Argument handling
@@ -3248,5 +3326,7 @@ int main( int argc, char* argv[] ) {
         DBG( 2, "Error forking. " );
         return 200;
     }
+    return 0;
 }
 
+#endif // UNIT_TEST
