@@ -1,3 +1,9 @@
+pcm (202112-1) unstable; urgency=medium
+
+  * New upstream release.
+
+ -- Adam Borowski <kilobyte@angband.pl>  Wed, 29 Dec 2021 18:07:16 +0100
+
 pcm (202110-1) unstable; urgency=medium
 
   * New upstream release.
