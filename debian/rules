@@ -4,7 +4,7 @@
 export DEB_BUILD_MAINT_OPTIONS = hardening=+all
 
 override_dh_auto_configure:
-	printf '#define PCM_VERSION " (%s)"\n' >version.h $$(dpkg-parsechangelog -S Version)
+	printf '#define PCM_VERSION " (%s)"\n' >src/version.h $$(dpkg-parsechangelog -S Version)
 	dh_auto_configure
 
 %:
