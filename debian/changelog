@@ -1,3 +1,10 @@
+pcm (202201-1) unstable; urgency=medium
+
+  * New upstream release.
+  * Upstream build system changed to cmake.
+
+ -- Adam Borowski <kilobyte@angband.pl>  Thu, 03 Feb 2022 14:01:20 +0100
+
 pcm (202112-1) unstable; urgency=medium
 
   * New upstream release.
