@@ -1,3 +1,11 @@
+pcm (202202-1) unstable; urgency=medium
+
+  * New upstream release.
+  * Don't install superfluous license files.
+  * Don't call dpkg-parsechangelog ourselves.
+
+ -- Adam Borowski <kilobyte@angband.pl>  Mon, 07 Mar 2022 13:13:52 +0100
+
 pcm (202201-1) unstable; urgency=medium
 
   * New upstream release.
