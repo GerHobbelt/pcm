@@ -130,13 +130,13 @@ bool PCM::initWinRing0Lib()
 
 class TemporalThreadAffinity  // speedup trick for Linux, FreeBSD, DragonFlyBSD, Windows
 {
-    TemporalThreadAffinity(); // forbiden
+    TemporalThreadAffinity(); // forbidden
 #if defined(__FreeBSD__) || (defined(__DragonFly__) && __DragonFly_version >= 400707)
     cpu_set_t old_affinity;
-    const bool restore;
+    bool restore;
 
 public:
-    TemporalThreadAffinity(uint32 core_id, bool checkStatus = true, const bool restore_ = false)
+    TemporalThreadAffinity(uint32 core_id, bool checkStatus = true, const bool restore_ = true)
        : restore(restore_)
     {
         assert(core_id < 1024);
@@ -152,6 +152,7 @@ public:
         // CPU_CMP() returns true if old_affinity is NOT equal to new_affinity
         if (!(CPU_CMP(&old_affinity, &new_affinity)))
         {
+            restore = false;
             return; // the same affinity => return
         }
         res = pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &new_affinity);
@@ -171,10 +172,10 @@ public:
     cpu_set_t * old_affinity;
     static constexpr auto maxCPUs = 8192;
     const size_t set_size;
-    const bool restore;
+    bool restore;
 
 public:
-    TemporalThreadAffinity(const uint32 core_id, bool checkStatus = true, const bool restore_ = false)
+    TemporalThreadAffinity(const uint32 core_id, bool checkStatus = true, const bool restore_ = true)
         : set_size(CPU_ALLOC_SIZE(maxCPUs)), restore(restore_)
     {
         assert(core_id < maxCPUs);
@@ -193,6 +194,7 @@ public:
         if (CPU_EQUAL_S(set_size, old_affinity, new_affinity))
         {
             CPU_FREE(new_affinity);
+            restore = false;
             return;
         }
         res = pthread_setaffinity_np(pthread_self(), set_size, new_affinity);
@@ -212,7 +214,7 @@ public:
 #elif defined(_MSC_VER)
     ThreadGroupTempAffinity affinity;
 public:
-    TemporalThreadAffinity(uint32 core, bool checkStatus = true, const bool restore = false)
+    TemporalThreadAffinity(uint32 core, bool checkStatus = true, const bool restore = true)
        : affinity(core, checkStatus, restore)
     {
     }
@@ -2074,7 +2076,6 @@ PCM::PCM() :
     pkgMinimumPower(-1),
     pkgMaximumPower(-1),
     systemTopology(new SystemRoot(this)),
-    programmed_pmu(false),
     joulesPerEnergyUnit(0),
 #ifdef __linux__
     resctrl(*this),
@@ -2411,6 +2412,7 @@ PCM::ErrorCode PCM::program(const PCM::ProgramMode mode_, const void * parameter
     ExtendedCustomCoreEventDescription * pExtDesc = (ExtendedCustomCoreEventDescription *)parameter_;
 
 #ifdef PCM_USE_PERF
+    closePerfHandles(silent);
     if (!silent) std::cerr << "Trying to use Linux perf events...\n";
     const char * no_perf_env = std::getenv("PCM_NO_PERF");
     if (no_perf_env != NULL && std::string(no_perf_env) == std::string("1"))
@@ -2461,7 +2463,7 @@ PCM::ErrorCode PCM::program(const PCM::ProgramMode mode_, const void * parameter
     }
 #endif
 
-    if (true)
+    if (programmed_core_pmu == false)
     {
         if((canUsePerf == false) && PMUinUse())
         {
@@ -2740,8 +2742,6 @@ PCM::ErrorCode PCM::program(const PCM::ProgramMode mode_, const void * parameter
     }
     #endif
 
-    programmed_pmu = true;
-
     lastProgrammedCustomCounters.clear();
     lastProgrammedCustomCounters.resize(num_cores);
     core_global_ctrl_value = 0ULL;
@@ -2773,6 +2773,8 @@ PCM::ErrorCode PCM::program(const PCM::ProgramMode mode_, const void * parameter
             return status;
         }
     }
+
+    programmed_core_pmu = true;
 
     if (canUsePerf && !silent)
     {
@@ -3579,7 +3581,7 @@ uint32 PCM::checkCustomCoreProgramming(std::shared_ptr<SafeMsrHandle> msr)
     const auto core = msr->getCoreId();
     if (size_t(core) >= lastProgrammedCustomCounters.size() || canUsePerf)
     {
-        // checking 'canUsePerf'because corruption detection curently works
+        // checking 'canUsePerf'because corruption detection currently works
         // only if perf is not used, see https://github.com/opcm/pcm/issues/106
         return 0;
     }
@@ -3806,9 +3808,9 @@ const char * PCM::getUArchCodename(const int32 cpu_model_param) const
     return "unknown";
 }
 
-void PCM::cleanupPMU(const bool silent)
-{
 #ifdef PCM_USE_PERF
+void PCM::closePerfHandles(const bool silent)
+{
     if (canUsePerf)
     {
         auto cleanOne = [this](PerfEventHandleContainer & cont)
@@ -3831,6 +3833,17 @@ void PCM::cleanupPMU(const bool silent)
         perfEventTaskHandle.clear();
 
         if (!silent) std::cerr << " Closed perf event handles\n";
+    }
+}
+#endif
+
+void PCM::cleanupPMU(const bool silent)
+{
+    programmed_core_pmu = false;
+#ifdef PCM_USE_PERF
+    closePerfHandles(silent);
+    if (canUsePerf)
+    {
         return;
     }
 #endif
@@ -5741,15 +5754,14 @@ ServerPCICFGUncore::ServerPCICFGUncore(uint32 socket_, const PCM * pcm) :
    , cpu_model(pcm->getCPUModel())
    , qpi_speed(0)
 {
-    initRegisterLocations(pcm);
-    initBuses(socket_, pcm);
-
     if (pcm->useLinuxPerfForUncore())
     {
         initPerf(socket_, pcm);
     }
     else
     {
+        initRegisterLocations(pcm);
+        initBuses(socket_, pcm);
         initDirect(socket_, pcm);
     }
 
