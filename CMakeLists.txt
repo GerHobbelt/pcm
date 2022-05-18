@@ -52,14 +52,27 @@ if(UNIX)  # APPLE, LINUX, FREE_BSD
     message(STATUS "CMAKE_C_FLAGS: ${CMAKE_C_FLAGS}")
 
     set(PCM_OPTIONAL_FLAGS "-Wall")
-    set(CMAKE_CXX_FLAGS_RELEASE "${PCM_OPTIONAL_FLAGS} -O3")
+    set(CMAKE_CXX_FLAGS_RELEASE "${PCM_OPTIONAL_FLAGS} -O3 -D_FORTIFY_SOURCE=1")
     set(CMAKE_CXX_FLAGS_DEBUG "${PCM_OPTIONAL_FLAGS} -O0 -g")
-    set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "${PCM_OPTIONAL_FLAGS} -O3 -g")
+    set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "${PCM_OPTIONAL_FLAGS} -O3 -g -D_FORTIFY_SOURCE=1")
     set(CMAKE_C_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE}")
     set(CMAKE_C_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG}")
     set(CMAKE_C_FLAGS_RELWITHDEBINFO "${CMAKE_CXX_FLAGS_RELWITHDEBINFO}")
 
 endif(UNIX)
+
+# interface library for simdjson
+add_library(PCM_SIMDJSON INTERFACE)
+find_package(simdjson QUIET)
+if(simdjson_FOUND)
+    target_link_libraries(PCM_SIMDJSON INTERFACE simdjson::simdjson)
+    target_compile_definitions(PCM_SIMDJSON INTERFACE SYSTEM_SIMDJSON)
+else()
+    message("simdjson not found in system, falling back to wrapper")
+    file(GLOB SIMDJSON_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/src/simdjson_wrapper.cpp)
+    target_sources(PCM_SIMDJSON INTERFACE ${SIMDJSON_SOURCE})
+    target_include_directories(PCM_SIMDJSON INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+endif(simdjson_FOUND)
 
 #######################
 # Install
