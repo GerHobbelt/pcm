@@ -3,7 +3,7 @@ Section: utils
 Priority: optional
 Maintainer: Adam Borowski <kilobyte@angband.pl>
 Build-Depends: debhelper-compat (= 13), libsimdjson-dev, cmake
-Standards-Version: 4.6.0
+Standards-Version: 4.6.1
 Homepage: https://github.com/opcm/pcm
 Vcs-Browser: https://github.com/kilobyte/pcm
 Vcs-Git: https://github.com/kilobyte/pcm
