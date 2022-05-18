@@ -1,3 +1,10 @@
+pcm (202205-1) unstable; urgency=medium
+
+  * New upstream release.
+  * Use system simdjson.
+
+ -- Adam Borowski <kilobyte@angband.pl>  Wed, 18 May 2022 13:19:15 +0200
+
 pcm (202203-1) unstable; urgency=medium
 
   * New upstream release.
