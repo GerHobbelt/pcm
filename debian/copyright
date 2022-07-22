@@ -6,7 +6,7 @@ Files: *
 Copyright: 2009-2021, Intel Corporation
 License: BSD-3
 
-Files: freegetopt
+Files: src/freegetopt
 Copyright: 2002-2003 Mark K. Kim
 License: BSD-3
 
@@ -36,7 +36,7 @@ License: BSD-3
  OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
  OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-Files: winring0
+Files: src/winring0
 Copyright: 2007-2009 OpenLibSys.org
 License: BSD-2
  Redistribution and use in source and binary forms, with or without
@@ -59,7 +59,7 @@ License: BSD-2
  (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
  THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-Files: winpmem
+Files: src/winpmem
 Copyright:
  2012 Michael Cohen <scudette@gmail.com>
  2009-2013, Intel Corporation
