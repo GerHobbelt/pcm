@@ -13,5 +13,6 @@ override_dh_auto_configure:
 
 override_dh_auto_install:
 	dh_auto_install
+	mv debian/pcm/usr/share/doc/PCM debian/pcm/usr/share/doc/pcm
 	rm debian/pcm/usr/share/doc/pcm/license.txt
 	rm -r debian/pcm/usr/share/licenses
