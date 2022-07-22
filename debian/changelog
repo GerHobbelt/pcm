@@ -1,3 +1,9 @@
+pcm (202207-1) unstable; urgency=medium
+
+  * New upstream release.
+
+ -- Adam Borowski <kilobyte@angband.pl>  Fri, 22 Jul 2022 17:48:12 +0200
+
 pcm (202205-1) unstable; urgency=medium
 
   * New upstream release.
