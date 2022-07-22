@@ -1,15 +1,5 @@
-/*
-Copyright (c) 2020, Intel Corporation
-All rights reserved.
-
-Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:
-
-    * Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer in the documentation and/or other materials provided with the distribution.
-    * Neither the name of Intel Corporation nor the names of its contributors may be used to endorse or promote products derived from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-*/
+// SPDX-License-Identifier: BSD-3-Clause
+// Copyright (c) 2020, Intel Corporation
 
 #include <vector>
 #include <memory>
@@ -605,7 +595,7 @@ std::string getPCMDashboardJSON(const PCMDashboardType type, int ns, int nu, int
         for (size_t s = 0; s < NumSockets; ++s)
         {
             const auto S = std::to_string(s);
-            auto panel = std::make_shared<GraphPanel>(0, y, width, height, std::string("Socket") + S + " UPI " + m, utilization?"%": "MByte/sec", false);
+            auto panel = std::make_shared<GraphPanel>(0, y, width, height, std::string("Socket") + S + " " + pcm->xPI() + " " + m, utilization?"%": "MByte/sec", false);
             std::shared_ptr<Panel> panel1;
             if (utilization)
                 panel1 = std::make_shared<GaugePanel>(width, y, max_width - width, height, std::string("Current Socket") + S + " UPI " + m + " (%)");
@@ -616,8 +606,8 @@ std::string getPCMDashboardJSON(const PCMDashboardType type, int ns, int nu, int
             for (size_t l = 0; l < NumUPILinksPerSocket; ++l)
             {
                 const auto L = std::to_string(l);
-                auto t = createTarget("UPI" + std::to_string(l),
-                    "mean(\\\"QPI/UPI Links_QPI Counters Socket " + S + "_" + m + " On Link " + L + "\\\")" +  suffix,
+                auto t = createTarget(pcm->xPI() + std::to_string(l),
+                    "mean(\\\"" + std::string(pcm->xPI()) + " Links_QPI Counters Socket " + S + "_" + m + " On Link " + L + "\\\")" +  suffix,
                     "rate(" + prometheusMetric(m) + "_On_Link_" + L + prometheusSystem(S) + interval + ")" + suffix);
                 panel->push(t);
                 panel1->push(t);

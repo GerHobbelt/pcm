@@ -1,15 +1,5 @@
-/*
-Copyright (c) 2009-2019, Intel Corporation
-All rights reserved.
-
-Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:
-
-    * Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer in the documentation and/or other materials provided with the distribution.
-    * Neither the name of Intel Corporation nor the names of its contributors may be used to endorse or promote products derived from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-*/
+// SPDX-License-Identifier: BSD-3-Clause
+// Copyright (c) 2009-2019, Intel Corporation
 //
 // monitor CPU conters for ksysguard
 //
@@ -45,6 +35,8 @@ int main()
     {
         string s;
         cin >> s;
+
+        const auto xpi = counters.getXpi();
 
         // list counters
         if (s == "monitors") {
@@ -95,10 +87,10 @@ int main()
             }
             for (uint32 a = 0; a < counters.getNumSockets(); ++a) {
                 for (uint32 l = 0; l < counters.getQPILinksPerSocket(); ++l)
-                    cout << "Socket" << a << "/BytesIncomingToQPI" << l << "\tfloat\n";
+                    cout << "Socket" << a << "/BytesIncomingTo" << xpi << l << "\tfloat\n";
             }
 
-            cout << "QPI_Traffic\tfloat\n";
+            cout << xpi << "_Traffic\tfloat\n";
             cout << "Frequency\tfloat\n";
             cout << "IPC\tfloat\n";       //double check output
             cout << "L2CacheHitRatio\tfloat\n";
@@ -356,19 +348,19 @@ int main()
         for (uint32 l = 0; l < counters.getQPILinksPerSocket(); ++l) {
             for (uint32 i = 0; i < counters.getNumSockets(); ++i) {
                 stringstream c;
-                c << "Socket" << i << "/BytesIncomingToQPI" << l << "?";
+                c << "Socket" << i << "/BytesIncomingTo" << xpi << l << "?";
                 if (s == c.str()) {
                     //cout << "Socket" << i << "\tBytes incoming to QPI link\t" << l<< "\t\t GB\n";
-                    cout << "incoming to Socket" << i << " QPI Link" << l << "\t0\t\tGB\n";
+                    cout << "incoming to Socket" << i << " " << xpi << " Link" << l << "\t0\t\tGB\n";
                 }
             }
         }
 
         {
             stringstream c;
-            c << "QPI_Traffic?";
+            c << xpi << "_Traffic?";
             if (s == c.str()) {
-                cout << "Traffic on all QPIs\t0\t\tGB\n";
+                cout << "Traffic on all " << xpi << " links\t0\t\tGB\n";
             }
         }
 
@@ -637,7 +629,7 @@ int main()
         for (uint32 l = 0; l < counters.getQPILinksPerSocket(); ++l) {
             for (uint32 i = 0; i < counters.getNumSockets(); ++i) {
                 stringstream c;
-                c << "Socket" << i << "/BytesIncomingToQPI" << l;
+                c << "Socket" << i << "/BytesIncomingTo" << xpi << l;
                 if (s == c.str()) {
                     cout << double(counters.getSocket<uint64, ::getIncomingQPILinkBytes>(i, l)) / 1024 / 1024 / 1024 << "\n";
                 }
@@ -669,7 +661,8 @@ int main()
         OUTPUT_SYSTEM_METRIC("L3CacheHitRatio", (double(counters.getSystem<double, ::getL3CacheHitRatio>())))
         OUTPUT_SYSTEM_METRIC("L2CacheMisses", (double(counters.getSystem<uint64, ::getL2CacheMisses>())))
         OUTPUT_SYSTEM_METRIC("L3CacheMisses", (double(counters.getSystem<uint64, ::getL3CacheMisses>())))
-        OUTPUT_SYSTEM_METRIC("QPI_Traffic", (double(counters.getSystem<uint64, ::getAllIncomingQPILinkBytes>()) / 1024 / 1024 / 1024))
+        OUTPUT_SYSTEM_METRIC(std::string(xpi + std::string("_Traffic")),
+            (double(counters.getSystem<uint64, ::getAllIncomingQPILinkBytes>()) / 1024 / 1024 / 1024))
 
         // exit
         if (s == "quit" || s == "exit" || s == "") {

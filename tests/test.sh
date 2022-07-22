@@ -327,4 +327,37 @@ if [ "$?" -ne "0" ]; then
     exit 1
 fi
 
+echo Testing pcm-raw with -json
+./pcm-raw -el event_file_test.txt -json=raw_json.json -i=4 0.25
+if [ "$?" -ne "0" ]; then
+    echo "Error in pcm-raw"
+    exit 1
+fi
+
+echo Testing pcm-raw with -edp
+./pcm-raw -edp -out raw_edp.txt 0.25 -tr -i=4 -el event_file_test.txt
+if [ "$?" -ne "0" ]; then
+    echo "Error in pcm-raw"
+    exit 1
+fi
+
+echo Testing pcm-raw with -edp and offlined cores
+
+online_offline_cores() {
+    for i in {5..10};
+    do
+        echo $1 > /sys/devices/system/cpu/cpu$i/online
+    done
+}
+
+online_offline_cores 0
+./pcm-raw -edp -out raw_edp_offlined_cores.txt 0.25 -tr -i=4 -el event_file_test.txt
+if [ "$?" -ne "0" ]; then
+    online_offline_cores 1
+    echo "Error in pcm-raw with offlined cores"
+    exit 1
+fi
+online_offline_cores 1
+
+
 popd

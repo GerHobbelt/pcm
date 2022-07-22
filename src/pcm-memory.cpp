@@ -1,16 +1,5 @@
-/*
-
-   Copyright (c) 2009-2020, Intel Corporation
-   All rights reserved.
-
-   Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:
-
- * Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer.
- * Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer in the documentation and/or other materials provided with the distribution.
- * Neither the name of Intel Corporation nor the names of its contributors may be used to endorse or promote products derived from this software without specific prior written permission.
-
- THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- */
+// SPDX-License-Identifier: BSD-3-Clause
+// Copyright (c) 2009-2020, Intel Corporation
 // written by Patrick Lu
 // increased max sockets to 256 - Thomas Willhalm
 
@@ -516,8 +505,9 @@ void display_bandwidth_csv(PCM *m, memdata_t *md, uint64 /*elapsedTime*/, const 
         {
             for (uint64 channel = 0; channel < max_imc_channels; ++channel)
             {
+                bool invalid_data = false;
                 if (md->iMC_Rd_socket_chan[skt][channel] < 0.0 && md->iMC_Wr_socket_chan[skt][channel] < 0.0) //If the channel read neg. value, the channel is not working; skip it.
-                    continue;
+                    invalid_data = true;
 
                 choose(outputType,
                        [printSKT]() {
@@ -527,9 +517,12 @@ void display_bandwidth_csv(PCM *m, memdata_t *md, uint64 /*elapsedTime*/, const 
                            cout << "Ch" << channel << "Read,"
                                 << "Ch" << channel << "Write,";
                        },
-                       [&md, &skt, &channel]() {
-                           cout << setw(8) << md->iMC_Rd_socket_chan[skt][channel] << ','
-                                << setw(8) << md->iMC_Wr_socket_chan[skt][channel] << ',';
+                       [&md, &skt, &channel, &invalid_data]() {
+                           if (invalid_data)
+                               cout << ",,";
+                           else
+                               cout << setw(8) << md->iMC_Rd_socket_chan[skt][channel] << ','
+                                    << setw(8) << md->iMC_Wr_socket_chan[skt][channel] << ',';
                        });
 
                 if (md->metrics == Pmem)
@@ -542,9 +535,12 @@ void display_bandwidth_csv(PCM *m, memdata_t *md, uint64 /*elapsedTime*/, const 
                                cout << "Ch" << channel << "PMM_Read,"
                                     << "Ch" << channel << "PMM_Write,";
                            },
-                           [&skt, &md, &channel]() {
-                               cout << setw(8) << md->iMC_PMM_Rd_socket_chan[skt][channel] << ','
-                                    << setw(8) << md->iMC_PMM_Wr_socket_chan[skt][channel] << ',';
+                           [&skt, &md, &channel, &invalid_data]() {
+                               if (invalid_data)
+                                   cout << ",,";
+                               else
+                                   cout << setw(8) << md->iMC_PMM_Rd_socket_chan[skt][channel] << ','
+                                        << setw(8) << md->iMC_PMM_Wr_socket_chan[skt][channel] << ',';
                            });
                 }
             }
@@ -1134,8 +1130,8 @@ int main(int argc, char * argv[])
             Driver tmpDrvObject = Driver(Driver::msrLocalPath());
             if (!tmpDrvObject.start())
             {
-                wcerr << "Can not access CPU counters\n";
-                wcerr << "You must have a signed  driver at " << tmpDrvObject.driverPath() << " and have administrator rights to run this program\n";
+                tcerr << "Can not access CPU counters\n";
+                tcerr << "You must have a signed  driver at " << tmpDrvObject.driverPath() << " and have administrator rights to run this program\n";
                 exit(EXIT_FAILURE);
             }
             exit(EXIT_SUCCESS);

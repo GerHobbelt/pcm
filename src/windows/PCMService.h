@@ -1,15 +1,5 @@
-/*
-Copyright (c) 2009-2012, Intel Corporation
-All rights reserved.
-
-Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:
-
-    * Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer in the documentation and/or other materials provided with the distribution.
-    * Neither the name of Intel Corporation nor the names of its contributors may be used to endorse or promote products derived from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-*/
+// SPDX-License-Identifier: BSD-3-Clause
+// Copyright (c) 2009-2012, Intel Corporation
 /*
 ** Written by Otto Bruggeman, Roman Dementiev
 */
@@ -20,6 +10,11 @@ THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND 
 #include "pcm-lib.h"
 #include "windriver.h"
 #include <stdexcept>
+
+#ifndef UNICODE
+#include <locale>
+#include <codecvt>
+#endif
 #pragma managed
 
 using namespace pcm;
@@ -76,6 +71,9 @@ namespace PCMServiceNS {
             m_->program();
 
             log_->WriteEntry(Globals::ServiceName, "PMU Programmed.");
+
+            CountersQpi = gcnew String(L"PCM " + gcnew System::String(m_->xPI()) + L" Counters");
+            MetricQpiBand = gcnew String(gcnew System::String(m_->xPI()) + L" Link Bandwidth");
 
             // This here will only create the necessary registry entries, the actual counters are created later.
             // New unified category
@@ -194,7 +192,7 @@ namespace PCMServiceNS {
             if (collectionInformation_->qpi)
             {
                 counterCollection->Clear();
-                counter = gcnew CounterCreationData(MetricQpiBand, "Displays the incoming bandwidth in bytes/s of this QPI link.", PerformanceCounterType::CounterDelta64);
+                counter = gcnew CounterCreationData(MetricQpiBand, L"Displays the incoming bandwidth in bytes/s of this " + gcnew System::String(m_->xPI()) + L" link", PerformanceCounterType::CounterDelta64);
                 counterCollection->Add( counter );
                 PerformanceCounterCategory::Create(CountersQpi, "Processor Counter Monitor", PerformanceCounterCategoryType::MultiInstance, counterCollection);
             }
@@ -637,7 +635,7 @@ namespace PCMServiceNS {
         // Counter variable names
         initonly String^ CountersCore = gcnew String(L"PCM Core Counters");
         initonly String^ CountersSocket = gcnew String(L"PCM Socket Counters");
-        initonly String^ CountersQpi = gcnew String(L"PCM QPI Counters");
+        initonly String^ CountersQpi;
 
         initonly String^ MetricCoreClocktick = gcnew String(L"Clockticks");
         initonly String^ MetricCoreRetired = gcnew String(L"Instructions Retired");
@@ -680,7 +678,7 @@ namespace PCMServiceNS {
         initonly String^ MetricSocketResC9Base  = gcnew String(L"package C9-state base");
         initonly String^ MetricSocketResC10Base = gcnew String(L"package C10-state base");
 
-        initonly String^ MetricQpiBand = gcnew String(L"QPI Link Bandwidth");
+        initonly String^ MetricQpiBand;
 
         // Configuration values
         const int sampleRate_;
@@ -746,6 +744,7 @@ namespace PCMServiceNS {
         /// </summary>
         virtual void OnStart(array<String^>^ args) override
         {
+            PCM* m_ = PCM::getInstance();
             SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL);
             // Default values for configuration
             int sampleRate = 1000;
@@ -753,29 +752,29 @@ namespace PCMServiceNS {
 
             // Read configuration values from registry
             HKEY hkey;
-            if (ERROR_SUCCESS == RegOpenKeyEx(HKEY_LOCAL_MACHINE, L"SOFTWARE\\pcm\\service", NULL, KEY_READ, &hkey))
+            if (ERROR_SUCCESS == RegOpenKeyEx(HKEY_LOCAL_MACHINE, TEXT("SOFTWARE\\pcm\\service"), NULL, KEY_READ, &hkey))
             {
                 DWORD regDWORD = static_cast<DWORD>(REG_DWORD);
                 DWORD lenDWORD = 32;
 
                 DWORD sampleRateRead(0);
-                if (ERROR_SUCCESS == RegQueryValueEx(hkey, L"SampleRate", NULL, NULL, reinterpret_cast<LPBYTE>(&sampleRateRead), &lenDWORD))
+                if (ERROR_SUCCESS == RegQueryValueEx(hkey, TEXT("SampleRate"), NULL, NULL, reinterpret_cast<LPBYTE>(&sampleRateRead), &lenDWORD))
                 {
                     sampleRate = (int)sampleRateRead;
                 }
 
                 DWORD collectCoreRead(0);
-                if (ERROR_SUCCESS == RegQueryValueEx(hkey, L"CollectCore", NULL, NULL, reinterpret_cast<LPBYTE>(&collectCoreRead), &lenDWORD)) {
+                if (ERROR_SUCCESS == RegQueryValueEx(hkey, TEXT("CollectCore"), NULL, NULL, reinterpret_cast<LPBYTE>(&collectCoreRead), &lenDWORD)) {
                     collectionInformation->core = (int)collectCoreRead > 0;
                 }
 
                 DWORD collectSocketRead(0);
-                if (ERROR_SUCCESS == RegQueryValueEx(hkey, L"CollectSocket", NULL, NULL, reinterpret_cast<LPBYTE>(&collectSocketRead), &lenDWORD)) {
+                if (ERROR_SUCCESS == RegQueryValueEx(hkey, TEXT("CollectSocket"), NULL, NULL, reinterpret_cast<LPBYTE>(&collectSocketRead), &lenDWORD)) {
                     collectionInformation->socket = (int)collectSocketRead > 0;
                 }
 
                 DWORD collectQpiRead(0);
-                if (ERROR_SUCCESS == RegQueryValueEx(hkey, L"CollectQpi", NULL, NULL, reinterpret_cast<LPBYTE>(&collectQpiRead), &lenDWORD)) {
+                if (ERROR_SUCCESS == RegQueryValueEx(hkey, TEXT("CollectQpi"), NULL, NULL, reinterpret_cast<LPBYTE>(&collectQpiRead), &lenDWORD)) {
                     collectionInformation->qpi = (int)collectQpiRead > 0;
                 }
 
@@ -788,7 +787,13 @@ namespace PCMServiceNS {
             drv_ = new Driver;
             if (!drv_->start())
             {
-                String^ s = gcnew String((L"Cannot open the driver.\nYou must have a signed driver at " + drv_->driverPath() + L" and have administrator rights to run this program.\n\n").c_str());
+#ifdef UNICODE
+                const auto& driverPath = drv_->driverPath();
+#else
+                std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>> char_to_wide;
+                std::wstring driverPath = char_to_wide.from_bytes(drv_->driverPath().c_str());
+#endif
+                String^ s = gcnew String((L"Cannot open the driver.\nYou must have a signed driver at " + driverPath + L" and have administrator rights to run this program.\n\n").c_str());
                 EventLog->WriteEntry(Globals::ServiceName, s, EventLogEntryType::Error);
                 SetServiceFail(ERROR_FILE_NOT_FOUND);
                 throw gcnew Exception(s);

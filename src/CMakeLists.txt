@@ -1,13 +1,5 @@
+# SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2022, Intel Corporation
-# All rights reserved.
-#
-# Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:
-#
-# * Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer.
-# * Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer in the documentation and/or other materials provided with the distribution.
-# * Neither the name of Intel Corporation nor the names of its contributors may be used to endorse or promote products derived from this software without specific prior written permission.
-#
-# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 
 # All pcm-* executables
@@ -85,6 +77,50 @@ if(MSVC)
 
 endif(MSVC)
 
+#######################
+# SIMDJSON dependency
+#######################
+
+add_library(PCM_SIMDJSON INTERFACE) # interface library for simdjson
+set(SIMDJSON_IS_APPLICABLE TRUE)    # true if simdjson can be used, default - TRUE
+
+# check simdjson support matrix - https://github.com/simdjson/simdjson/blob/master/doc/basics.md
+# > GCC 7.4, > Clang 6.0 , > MSVC 2017
+if((CMAKE_CXX_COMPILER_ID STREQUAL "GNU"   AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 7.4) OR
+    (CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 6) OR
+    (CMAKE_CXX_COMPILER_ID STREQUAL "MSVC"  AND  MSVC_TOOLSET_VERSION VERSION_LESS 141)) # corresponds to VS2017
+     message(WARNING
+           " ${CMAKE_CXX_COMPILER} ${CMAKE_CXX_COMPILER_VERSION} is incompartible with simdjson features' requirements.\n"
+           " Refer to simdjson support matrix - https://github.com/simdjson/simdjson/blob/master/doc/basics.md .\n"
+           " Parsing events from 01.org/perfmon won't be supported.")
+        set(SIMDJSON_IS_APPLICABLE FALSE)
+endif()
+
+if(SIMDJSON_IS_APPLICABLE)
+    find_package(simdjson QUIET)  # Working form Ububtu 22.04
+    if(simdjson_FOUND)
+        message(STATUS "System SIMDJSON is used")
+        target_link_libraries(PCM_SIMDJSON INTERFACE simdjson::simdjson)
+        target_compile_definitions(PCM_SIMDJSON INTERFACE SYSTEM_SIMDJSON)
+        target_compile_definitions(PCM_SIMDJSON INTERFACE PCM_SIMDJSON_AVAILABLE)
+    else()
+        if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/simdjson/singleheader/simdjson.h")
+            message(STATUS "Local SIMDJSON exists: ${CMAKE_CURRENT_SOURCE_DIR}/simdjson/singleheader/simdjson.h")
+            file(GLOB SIMDJSON_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/simdjson/singleheader/simdjson.cpp)
+            target_sources(PCM_SIMDJSON INTERFACE ${SIMDJSON_SOURCE})
+            target_include_directories(PCM_SIMDJSON INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/simdjson/singleheader)
+            target_compile_definitions(PCM_SIMDJSON INTERFACE PCM_SIMDJSON_AVAILABLE)
+        else()
+            message(WARNING
+                " ${CMAKE_CURRENT_SOURCE_DIR}/simdjson/singleheader/simdjson.h doesn't exist\n"
+                " Run 'git clone https://github.com/simdjson/simdjson.git' in 'src' directory to get simdjson library")
+        endif()
+    endif(simdjson_FOUND)
+endif(SIMDJSON_IS_APPLICABLE)
+
+#######################
+# End of SIMDJSON dependency section
+#######################
 
 foreach(PROJECT_NAME ${PROJECT_NAMES})
     file(GLOB PROJECT_FILE ${PROJECT_NAME}.cpp)
@@ -99,12 +135,12 @@ foreach(PROJECT_NAME ${PROJECT_NAMES})
 
     if(LINUX OR FREE_BSD)
         set(LIBS ${LIBS} Threads::Threads)
-        install(TARGETS ${PROJECT_NAME} DESTINATION "sbin")
+        install(TARGETS ${PROJECT_NAME} DESTINATION ${CMAKE_INSTALL_SBINDIR})
     endif(LINUX OR FREE_BSD)
 
     if(APPLE)
         set(LIBS ${LIBS} Threads::Threads PcmMsr)
-        install(TARGETS ${PROJECT_NAME} DESTINATION "sbin")
+        install(TARGETS ${PROJECT_NAME} DESTINATION ${CMAKE_INSTALL_SBINDIR})
     endif(APPLE)
 
     if(MSVC)
@@ -125,39 +161,39 @@ if(UNIX) # APPLE, LINUX, FREE_BSD
         add_executable(daemon ${DAEMON_SOURCES})
         target_link_libraries(daemon PRIVATE PCM_STATIC Threads::Threads)
         set_target_properties(daemon PROPERTIES OUTPUT_NAME "pcm-daemon")
-        install(TARGETS daemon DESTINATION "sbin")
+        install(TARGETS daemon DESTINATION ${CMAKE_INSTALL_SBINDIR})
 
         file(GLOB CLIENT_SOURCES "client/*.cpp")
         add_executable(client ${CLIENT_SOURCES})
         target_link_libraries(client PRIVATE Threads::Threads)
         set_target_properties(client PROPERTIES OUTPUT_NAME "pcm-client")
-        install(TARGETS client DESTINATION "bin")
+        install(TARGETS client DESTINATION ${CMAKE_INSTALL_BINDIR})
     endif(LINUX)
 
     # Install extra files
     install(FILES pcm-bw-histogram.sh
-            DESTINATION "sbin"
+            DESTINATION ${CMAKE_INSTALL_SBINDIR}
             RENAME pcm-bw-histogram
             PERMISSIONS OWNER_EXECUTE OWNER_WRITE OWNER_READ GROUP_EXECUTE GROUP_READ WORLD_EXECUTE WORLD_READ)
     file(GLOB OPCODE_FILES "opCode*.txt")
     foreach(opcode_file ${OPCODE_FILES})
         get_filename_component(opcode_file_name ${opcode_file} NAME)
         configure_file(${opcode_file} ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/${opcode_file_name} COPYONLY)
-        install(FILES ${opcode_file} DESTINATION "share/pcm")
+        install(FILES ${opcode_file} DESTINATION ${CMAKE_INSTALL_DATADIR}/pcm)
     endforeach(opcode_file ${OPCODE_FILES})
 
     file(COPY "PMURegisterDeclarations" DESTINATION ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
-    install(DIRECTORY "PMURegisterDeclarations" DESTINATION "share/pcm")
+    install(DIRECTORY "PMURegisterDeclarations" DESTINATION ${CMAKE_INSTALL_DATADIR}/pcm)
 
     # Install docs
-    install(FILES ${CMAKE_SOURCE_DIR}/LICENSE DESTINATION "share/licenses/pcm/")
-    install(FILES ${CMAKE_SOURCE_DIR}/README.md DESTINATION "share/doc/pcm/")
+    install(FILES ${CMAKE_SOURCE_DIR}/LICENSE DESTINATION ${CMAKE_INSTALL_DATADIR}/licenses/pcm)
+    install(FILES ${CMAKE_SOURCE_DIR}/README.md DESTINATION ${CMAKE_INSTALL_DOCDIR})
 
     file(GLOB DOC_FILES  ${CMAKE_SOURCE_DIR}/doc/*.txt  ${CMAKE_SOURCE_DIR}/doc/*.md)
     foreach(doc_file ${DOC_FILES})
         get_filename_component(doc_file_name ${doc_file} NAME)
         configure_file(${doc_file} ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/${doc_file_name} COPYONLY)
-        install(FILES ${doc_file} DESTINATION "share/doc/pcm/")
+        install(FILES ${doc_file} DESTINATION ${CMAKE_INSTALL_DOCDIR})
     endforeach(doc_file ${DOC_FILES})
 
 endif(UNIX)

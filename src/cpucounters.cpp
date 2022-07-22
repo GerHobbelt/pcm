@@ -1,15 +1,5 @@
-/*
-Copyright (c) 2009-2020, Intel Corporation
-All rights reserved.
-
-Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:
-
-    * Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer in the documentation and/or other materials provided with the distribution.
-    * Neither the name of Intel Corporation nor the names of its contributors may be used to endorse or promote products derived from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-*/
+// SPDX-License-Identifier: BSD-3-Clause
+// Copyright (c) 2009-2020, Intel Corporation
 // written by Roman Dementiev
 //            Otto Bruggeman
 //            Thomas Willhalm
@@ -67,6 +57,7 @@ THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND 
 #ifdef __linux__
 #include <sys/mman.h>
 #include <dirent.h>
+#include <sys/resource.h>
 #endif
 #endif
 
@@ -113,8 +104,8 @@ bool PCM::initWinRing0Lib()
 
     BYTE major, minor, revision, release;
     GetDriverVersion(&major, &minor, &revision, &release);
-    wchar_t buffer[128];
-    swprintf_s(buffer, 128, _T("\\\\.\\WinRing0_%d_%d_%d"),(int)major,(int)minor, (int)revision);
+    TCHAR buffer[128];
+    _stprintf_s(buffer, 128, TEXT("\\\\.\\WinRing0_%d_%d_%d"),(int)major,(int)minor, (int)revision);
     restrictDriverAccess(buffer);
 
     return true;
@@ -597,6 +588,7 @@ bool PCM::detectModel()
     std::cerr << "STIBP supported          : " << ((cpuinfo.reg.edx & (1 << 27)) ? "yes" : "no") << "\n";
     std::cerr << "Spec arch caps supported : " << ((cpuinfo.reg.edx & (1 << 29)) ? "yes" : "no") << "\n";
     std::cerr << "Max CPUID level          : " << max_cpuid << "\n";
+    std::cerr << "CPU model number         : " << cpu_model << "\n";
 
     return true;
 }
@@ -1097,11 +1089,11 @@ bool PCM::discoverSystemTopology()
         }
         else
         {
-            std::wcerr << "Error in Windows function 'GetLogicalProcessorInformationEx': " <<
+            tcerr << "Error in Windows function 'GetLogicalProcessorInformationEx': " <<
                 GetLastError() << " ";
             const TCHAR * strError = _com_error(GetLastError()).ErrorMessage();
-            if (strError) std::wcerr << strError;
-            std::wcerr << "\n";
+            if (strError) tcerr << strError;
+            tcerr << "\n";
             return false;
         }
     }
@@ -1391,7 +1383,9 @@ bool PCM::discoverSystemTopology()
 
 void PCM::printSystemTopology() const
 {
-    if (num_cores == num_online_cores && hybrid == false)
+    const bool all_cores_online_no_hybrid = (num_cores == num_online_cores && hybrid == false);
+
+    if (all_cores_online_no_hybrid)
     {
       std::cerr << "Number of physical cores: " << (num_cores/threads_per_core) << "\n";
     }
@@ -1399,12 +1393,13 @@ void PCM::printSystemTopology() const
     std::cerr << "Number of logical cores: " << num_cores << "\n";
     std::cerr << "Number of online logical cores: " << num_online_cores << "\n";
 
-    if (num_cores == num_online_cores && hybrid == false)
+    if (all_cores_online_no_hybrid)
     {
       std::cerr << "Threads (logical cores) per physical core: " << threads_per_core << "\n";
     }
     else
     {
+        std::cerr << "Threads (logical cores) per physical core: " << threads_per_core << " (maybe imprecise due to core offlining/hybrid CPU)\n";
         std::cerr << "Offlined cores: ";
         for (int i = 0; i < (int)num_cores; ++i)
             if(isCoreOnline((int32)i) == false)
@@ -1412,10 +1407,15 @@ void PCM::printSystemTopology() const
         std::cerr << "\n";
     }
     std::cerr << "Num sockets: " << num_sockets << "\n";
-    if (num_phys_cores_per_socket > 0 && hybrid == false)
+    if (all_cores_online_no_hybrid)
     {
         std::cerr << "Physical cores per socket: " << num_phys_cores_per_socket << "\n";
     }
+    else
+    {
+        std::cerr << "Physical cores per socket: " << num_cores / num_sockets / threads_per_core << " (maybe imprecise due to core offlining/hybrid CPU)\n";
+    }
+
     if (hybrid == false)
     {
         std::cerr << "Last level cache slices per socket: " << getMaxNumOfCBoxes() << "\n";
@@ -2069,6 +2069,30 @@ std::ofstream* PCM::outfile = nullptr;       // output file stream
 std::streambuf* PCM::backup_ofile = nullptr; // backup of original output = cout
 std::streambuf* PCM::backup_ofile_cerr = nullptr; // backup of original output = cerr
 
+#ifdef __linux__
+void increaseULimit()
+{
+    rlimit lim{};
+    if (getrlimit(RLIMIT_NOFILE, &lim) == 0)
+    {
+        const rlim_t recommendedLimit = 1000000;
+        // std::cout << "file open limit: " << lim.rlim_cur << "," << lim.rlim_max << "\n";
+        if (lim.rlim_cur < recommendedLimit || lim.rlim_max < recommendedLimit)
+        {
+            lim.rlim_cur = lim.rlim_max = recommendedLimit;
+            if (setrlimit(RLIMIT_NOFILE, &lim) != 0)
+            {
+                std::cerr << "PCM Info: setrlimit for file limit " << recommendedLimit << " failed with error " << strerror(errno) << "\n";
+            }
+        }
+    }
+    else
+    {
+       std::cerr << "PCM Info: getrlimit for file limit failed with error " << strerror(errno) << "\n";
+    }
+}
+#endif
+
 PCM::PCM() :
     cpu_family(-1),
     cpu_model(-1),
@@ -2125,14 +2149,17 @@ PCM::PCM() :
     run_state(1),
     needToRestoreNMIWatchdog(false)
 {
+#ifdef __linux__
+    increaseULimit();
+#endif
 #ifdef _MSC_VER
     // WARNING: This driver code (msr.sys) is only for testing purposes, not for production use
     Driver drv(Driver::msrLocalPath());
     // drv.stop();     // restart driver (usually not needed)
     if (!drv.start())
     {
-        std::wcerr << "Cannot access CPU counters\n";
-        std::wcerr << "You must have a signed  driver at " << drv.driverPath() << " and have administrator rights to run this program\n";
+        tcerr << "Cannot access CPU counters\n";
+        tcerr << "You must have a signed  driver at " << drv.driverPath() << " and have administrator rights to run this program\n";
         return;
     }
 #endif
@@ -2199,10 +2226,11 @@ void PCM::printDetailedSystemTopology()
         std::cerr << "\n=====  Processor topology  =====\n";
         std::cerr << "OS_Processor    Thread_Id       Core_Id         Tile_Id         Package_Id      Core_Type   Native_CPU_Model\n";
         std::map<uint32, std::vector<uint32> > os_id_by_core, os_id_by_tile, core_id_by_socket;
+        size_t counter = 0;
         for (auto it = topology.begin(); it != topology.end(); ++it)
         {
             std::cerr << std::left << std::setfill(' ')
-                << std::setw(16) << it->os_id
+                << std::setw(16) << ((it->os_id >= 0) ? it->os_id : counter)
                 << std::setw(16) << it->thread_id
                 << std::setw(16) << it->core_id
                 << std::setw(16) << it->tile_id
@@ -2216,6 +2244,8 @@ void PCM::printDetailedSystemTopology()
             // add socket offset to distinguish cores and tiles from different sockets
             os_id_by_core[(it->socket << 15) + it->core_id].push_back(it->os_id);
             os_id_by_tile[(it->socket << 15) + it->tile_id].push_back(it->os_id);
+
+            ++counter;
         }
         std::cerr << "=====  Placement on packages  =====\n";
         std::cerr << "Package Id.    Core Id.     Processors\n";
@@ -3258,7 +3288,7 @@ void PCM::reportQPISpeed() const
             if(server_pcicfg_uncore[i].get()) server_pcicfg_uncore[i]->reportQPISpeed();
         }
     } else {
-        std::cerr << "Max QPI speed: " << max_qpi_speed / (1e9) << " GBytes/second (" << max_qpi_speed / (1e9*getBytesPerLinkTransfer()) << " GT/second)\n";
+        std::cerr << "Max " << xPI() << " speed: " << max_qpi_speed / (1e9) << " GBytes/second (" << max_qpi_speed / (1e9*getBytesPerLinkTransfer()) << " GT/second)\n";
     }
 
 }
@@ -5832,7 +5862,7 @@ ServerPCICFGUncore::ServerPCICFGUncore(uint32 socket_, const PCM * pcm) :
 
     std::cerr << "Socket " << socket_ << ": " <<
         getNumMC() << " memory controllers detected with total number of " << getNumMCChannels() << " channels. " <<
-        getNumQPIPorts() << " QPI ports detected." <<
+        getNumQPIPorts() << " " << pcm->xPI() << " ports detected." <<
         " " << m2mPMUs.size() << " M2M (mesh to memory) blocks detected."
         " " << haPMUs.size()  << " Home Agents detected."
         " " << m3upiPMUs.size() << " M3UPI blocks detected."
@@ -7526,7 +7556,7 @@ void ServerPCICFGUncore::reportQPISpeed() const
     std::cerr.precision(1);
     std::cerr << std::fixed;
     for (uint32 i = 0; i < (uint32)qpi_speed.size(); ++i)
-        std::cerr << "Max QPI link " << i << " speed: " << qpi_speed[i] / (1e9) << " GBytes/second (" << qpi_speed[i] / (1e9 * m->getBytesPerLinkTransfer()) << " GT/second)\n";
+        std::cerr << "Max " << m->xPI() << " link " << i << " speed: " << qpi_speed[i] / (1e9) << " GBytes/second (" << qpi_speed[i] / (1e9 * m->getBytesPerLinkTransfer()) << " GT/second)\n";
 }
 
 uint64 PCM::CX_MSR_PMON_CTRY(uint32 Cbo, uint32 Ctr) const
