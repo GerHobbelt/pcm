@@ -1,10 +1,10 @@
 --------------------------------------------------------------------------------
-Processor Counter Monitor (PCM)
+Intel&reg; Performance Counter Monitor (Intel&reg; PCM)
 --------------------------------------------------------------------------------
 
 [PCM Tools](#pcm-tools) | [Building PCM](#building-pcm-tools) | [Downloading Pre-Compiled PCM](#downloading-pre-compiled-pcm-tools) | [FAQ](#frequently-asked-questions-faq) | [API Documentation](#pcm-api-documentation) | [Environment Variables](#pcm-environment-variables) | [Compilation Options](#custom-compilation-options)
 
-Processor Counter Monitor (PCM) is an application programming interface (API) and a set of tools based on the API to monitor performance and energy metrics of Intel&reg; Core&trade;, Xeon&reg;, Atom&trade; and Xeon Phi&trade; processors. PCM works on Linux, Windows, Mac OS X, FreeBSD, DragonFlyBSD and ChromeOS operating systems.
+Intel&reg; Performance Counter Monitor (Intel&reg; PCM) is an application programming interface (API) and a set of tools based on the API to monitor performance and energy metrics of Intel&reg; Core&trade;, Xeon&reg;, Atom&trade; and Xeon Phi&trade; processors. PCM works on Linux, Windows, Mac OS X, FreeBSD, DragonFlyBSD and ChromeOS operating systems.
 
 *Github repository statistics:* ![Custom badge](https://img.shields.io/endpoint?url=https%3A%2F%2Fhetthbszh0.execute-api.us-east-2.amazonaws.com%2Fdefault%2Fpcm-clones) ![Custom badge](https://img.shields.io/endpoint?url=https%3A%2F%2F5urjfrshcd.execute-api.us-east-2.amazonaws.com%2Fdefault%2Fpcm-yesterday-clones) ![Custom badge](https://img.shields.io/endpoint?url=https%3A%2F%2Fcsqqh18g3l.execute-api.us-east-2.amazonaws.com%2Fdefault%2Fpcm-today-clones)
 
@@ -14,10 +14,11 @@ Processor Counter Monitor (PCM) is an application programming interface (API) an
 Current Build Status
 --------------------------------------------------------------------------------
 
-- Linux and OSX: [![Build Status](https://travis-ci.com/opcm/pcm.svg?branch=master)](https://travis-ci.com/opcm/pcm)
-- Windows: [![Build status](https://ci.appveyor.com/api/projects/status/github/opcm/pcm?branch=master&svg=true)](https://ci.appveyor.com/project/opcm/pcm)
-- FreeBSD: [![Build Status](https://api.cirrus-ci.com/github/opcm/pcm.svg)](https://cirrus-ci.com/github/opcm/pcm)
-- Docker Hub: [![Build status](https://img.shields.io/docker/cloud/build/opcm/pcm.svg)](doc/DOCKER_README.md) [![pulls](https://img.shields.io/docker/pulls/opcm/pcm.svg)](doc/DOCKER_README.md)
+- Linux: [![GitHub Workflow Status](https://img.shields.io/github/workflow/status/intel/pcm/Linux%20make/master)](https://github.com/intel/pcm/actions/workflows/linux_make.yml?query=branch%3Amaster)
+- Windows: [![Build status](https://ci.appveyor.com/api/projects/status/github/intel/pcm?branch=master&svg=true)](https://ci.appveyor.com/project/opcm/pcm)
+- FreeBSD: [![GitHub Workflow Status](https://img.shields.io/github/workflow/status/intel/pcm/FreeBSD%20build/master)](https://github.com/intel/pcm/actions/workflows/freebsd_build.yml?query=branch%3Amaster)
+- OS X: [![GitHub Workflow Status](https://img.shields.io/github/workflow/status/intel/pcm/Mac%20OS%20X%20build/master)](https://github.com/intel/pcm/actions/workflows/macosx_build.yml?query=branch%3Amaster)
+- Docker container: [![GitHub Workflow Status](https://img.shields.io/github/workflow/status/intel/pcm/Docker%20Build/master)](doc/DOCKER_README.md)
 
 --------------------------------------------------------------------------------
 PCM Tools
@@ -55,6 +56,18 @@ And finally a daemon that stores core, memory and QPI counters in shared memory 
 Building PCM Tools
 --------------------------------------------------------------------------------
 
+Clone PCM repository with submodules:
+
+```
+git clone --recursive https://github.com/opcm/pcm.git
+```
+
+or clone the repository first, and then update submodules with:
+
+```
+git submodule update --init --recursive
+```
+
 Install cmake then:
 
 ```
@@ -83,6 +96,7 @@ Downloading Pre-Compiled PCM Tools
 
 - Linux:
   * openSUSE: `sudo zypper install pcm`
+  * RHEL8.5 or later: `sudo dnf install pcm` 
   * Fedora: `sudo yum install pcm`
   * RPMs and DEBs with the *latest* PCM version for RHEL/SLE/Ubuntu/Debian/openSUSE/etc distributions (binary and source) are available [here](https://software.opensuse.org/download/package?package=pcm&project=home%3Aopcm)
 - Windows: download PCM binaries as [appveyor build service](https://ci.appveyor.com/project/opcm/pcm/history) artifacts and required Visual C++ Redistributable from [www.microsoft.com](https://www.microsoft.com/en-us/download/details.aspx?id=48145). Additional drivers are needed, see [WINDOWS_HOWTO.md](doc/WINDOWS_HOWTO.md).

@@ -6,10 +6,17 @@
 set(PROJECT_NAMES pcm pcm-numa pcm-latency pcm-power pcm-msr pcm-memory pcm-tsx pcm-pcie pcm-core pcm-iio pcm-lspci pcm-pcicfg pcm-mmio pcm-raw)
 
 file(GLOB COMMON_SOURCES msr.cpp cpucounters.cpp pci.cpp mmio.cpp bw.cpp utils.cpp topology.cpp debug.cpp threadpool.cpp)
-file(GLOB UNUX_SOURCES dashboard.cpp resctrl.cpp)
+
+if (APPLE)
+  file(GLOB UNUX_SOURCES dashboard.cpp)
+else()
+  file(GLOB UNUX_SOURCES dashboard.cpp resctrl.cpp)
+endif()
 
 if(UNIX)  # LINUX, FREE_BSD, APPLE
-    set(CMAKE_EXE_LINKER_FLAGS_RELEASE "${CMAKE_EXE_LINKER_FLAGS} -s")  # --strip-unneeded for packaging
+    if (NOT APPLE)
+      set(CMAKE_EXE_LINKER_FLAGS_RELEASE "${CMAKE_EXE_LINKER_FLAGS} -s")  # --strip-unneeded for packaging
+    endif()
 
     list(APPEND PROJECT_NAMES pcm-sensor)
     if(LINUX)
@@ -113,7 +120,9 @@ if(SIMDJSON_IS_APPLICABLE)
         else()
             message(WARNING
                 " ${CMAKE_CURRENT_SOURCE_DIR}/simdjson/singleheader/simdjson.h doesn't exist\n"
-                " Run 'git clone https://github.com/simdjson/simdjson.git' in 'src' directory to get simdjson library")
+                " Use `git clone --recursive` flag when cloning pcm repository to clone simdjson submodule as well or\n"
+                " update submodule with command 'git submodule update --init --recursive' or\n"
+                " run 'git clone https://github.com/simdjson/simdjson.git' in 'src' directory to get simdjson library")
         endif()
     endif(simdjson_FOUND)
 endif(SIMDJSON_IS_APPLICABLE)
@@ -214,4 +223,8 @@ if(MSVC)
         COMMAND ${CMAKE_COMMAND} -E copy_directory
         "${PROJECT_SOURCE_DIR}/src/PMURegisterDeclarations"
         "$<TARGET_FILE_DIR:pcm-raw>/PMURegisterDeclarations")
+    add_custom_command(TARGET pcm-service POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${PROJECT_SOURCE_DIR}/src/windows/pcm-service.exe.config"
+        $<TARGET_FILE_DIR:pcm-service>)
 endif(MSVC)

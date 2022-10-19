@@ -329,6 +329,7 @@ void pcm_cpuid_bsd(int leaf, PCM_CPUID_INFO& info, int core)
     {
         info.array[i] = cpuid_args_freebsd.data[i];
     }
+    ::close(fd);
 }
 #endif
 
@@ -799,7 +800,8 @@ void PCM::initCStateSupportTables()
         case APOLLO_LAKE:
         case DENVERTON:
         case ADL:
-	case SNOWRIDGE:
+        case RPL:
+        case SNOWRIDGE:
             PCM_CSTATE_ARRAY(pkgCStateMsr, PCM_PARAM_PROTECT({0, 0, 0x3F8, 0, 0x3F9, 0, 0x3FA, 0, 0, 0, 0 }) );
         case NEHALEM_EP:
         case NEHALEM:
@@ -867,7 +869,8 @@ void PCM::initCStateSupportTables()
         case DENVERTON:
         PCM_SKL_PATH_CASES
         case ADL:
-	case SNOWRIDGE:
+        case RPL:
+        case SNOWRIDGE:
         case ICX:
             PCM_CSTATE_ARRAY(coreCStateMsr, PCM_PARAM_PROTECT({0, 0, 0, 0x3FC, 0, 0, 0x3FD, 0x3FE, 0, 0, 0}) );
         case KNL:
@@ -1024,6 +1027,8 @@ bool PCM::discoverSystemTopology()
         return false;
     }
 
+    (void) coreMaskWidth; // to supress warnings on MacOS (unused vars)
+
     uint32 l2CacheMaskShift = 0;
 #ifdef PCM_DEBUG_TOPOLOGY
     uint32 threadsSharingL2;
@@ -1044,6 +1049,7 @@ bool PCM::discoverSystemTopology()
               << " [the most significant bit = " << l2CacheMaskShift << "]\n";
 #endif
 
+#ifndef __APPLE__
     auto populateEntry = [&smtMaskWidth, &coreMaskWidth, &l2CacheMaskShift](TopologyEntry & entry, const int apic_id)
     {
         entry.thread_id = smtMaskWidth ? extract_bits_ui(apic_id, 0, smtMaskWidth - 1) : 0;
@@ -1051,6 +1057,7 @@ bool PCM::discoverSystemTopology()
         entry.socket = extract_bits_ui(apic_id, smtMaskWidth + coreMaskWidth, 31);
         entry.tile_id = extract_bits_ui(apic_id, l2CacheMaskShift, 31);
     };
+#endif
 
     auto populateHybridEntry = [this](TopologyEntry& entry, int core) -> bool
     {
@@ -1271,8 +1278,11 @@ bool PCM::discoverSystemTopology()
         MSR.push_back(std::make_shared<SafeMsrHandle>(i));
     }
 
-    TopologyEntry *entries = new TopologyEntry[num_cores];
-    MSR[0]->buildTopology(num_cores, entries);
+    TopologyEntry entries[num_cores];
+    if (MSR[0]->buildTopology(num_cores, entries) != 0) {
+      std::cerr << "Unable to build CPU topology" << std::endl;
+      return false;
+    }
     for(int i = 0; i < num_cores; i++){
         socketIdMap[entries[i].socket] = 0;
         if(entries[i].os_id >= 0)
@@ -1280,15 +1290,13 @@ bool PCM::discoverSystemTopology()
             if(entries[i].core_id == 0 && entries[i].socket == 0) ++threads_per_core;
             if (populateHybridEntry(entries[i], i) == false)
             {
-                delete[] entries;
                 return false;
             }
             topology.push_back(entries[i]);
         }
     }
-    delete[] entries;
 // End of OSX specific code
-#endif // end of ifndef __APPLE__
+#endif
 
 #endif //end of ifdef _MSC_VER
 
@@ -1501,6 +1509,7 @@ bool PCM::detectNominalFrequency()
                || cpu_model == SNOWRIDGE
                || cpu_model == KNL
                || cpu_model == ADL
+               || cpu_model == RPL
                || cpu_model == SKX
                || cpu_model == ICX
                ) ? (100000000ULL) : (133333333ULL);
@@ -1631,9 +1640,16 @@ void PCM::initUncoreObjects()
            switch (cpu_model)
            {
            case TGL:
-           case ADL:
+           case ADL: // TGLClientBW works fine for ADL
+           case RPL: // TGLClientBW works fine for ADL
                clientBW = std::make_shared<TGLClientBW>();
                break;
+/*         Disabled since ADLClientBW requires 2x multiplier for BW on top
+           case ADL:
+           case RPL:
+               clientBW = std::make_shared<ADLClientBW>();
+               break;
+*/
            default:
                clientBW = std::make_shared<ClientBW>();
            }
@@ -2371,6 +2387,7 @@ bool PCM::isCPUModelSupported(const int model_)
             || model_ == RKL
             || model_ == TGL
             || model_ == ADL
+            || model_ == RPL
             || model_ == SKX
             || model_ == ICX
            );
@@ -2407,6 +2424,11 @@ bool PCM::checkModel()
             break;
         case ADL_1:
             cpu_model = ADL;
+            break;
+        case RPL_1:
+        case RPL_2:
+        case RPL_3:
+            cpu_model = RPL;
             break;
     }
 
@@ -2534,6 +2556,11 @@ PCM::ErrorCode PCM::program(const PCM::ProgramMode mode_, const void * parameter
         canUsePerf = false;
         if (!silent) std::cerr << "Installed Linux kernel perf does not support hardware top-down level-1 counters. Using direct PMU programming instead.\n";
     }
+    if (canUsePerf && (cpu_model == ADL || cpu_model == RPL))
+    {
+        canUsePerf = false;
+        if (!silent) std::cerr << "Linux kernel perf rejects an architectural event on your platform. Using direct PMU programming instead.\n";
+    }
 
     if (canUsePerf == false && noMSRMode())
     {
@@ -2591,6 +2618,7 @@ PCM::ErrorCode PCM::program(const PCM::ProgramMode mode_, const void * parameter
         else
         switch ( cpu_model ) {
             case ADL:
+            case RPL:
                 hybridAtomEventDesc[0].event_number = ARCH_LLC_MISS_EVTNR;
                 hybridAtomEventDesc[0].umask_value = ARCH_LLC_MISS_UMASK;
                 hybridAtomEventDesc[1].event_number = ARCH_LLC_REFERENCE_EVTNR;
@@ -2929,10 +2957,10 @@ void PCM::checkError(const PCM::ErrorCode code)
     case PCM::Success:
         break;
     case PCM::MSRAccessDenied:
-        std::cerr << "Access to Processor Counter Monitor has denied (no MSR or PCI CFG space access).\n";
+        std::cerr << "Access to Intel(r) Performance Counter Monitor has denied (no MSR or PCI CFG space access).\n";
         exit(EXIT_FAILURE);
     case PCM::PMUBusy:
-        std::cerr << "Access to Processor Counter Monitor has denied (Performance Monitoring Unit is occupied by other application)\n";
+        std::cerr << "Access to Intel(r) Performance Counter Monitor has denied (Performance Monitoring Unit is occupied by other application)\n";
         std::cerr << "Try to stop the application that uses PMU, or reset PMU configuration from PCM application itself\n";
         std::cerr << "You can try to reset PMU configuration now. Try to reset? (y/n)\n";
         char yn;
@@ -2944,7 +2972,7 @@ void PCM::checkError(const PCM::ErrorCode code)
         }
         exit(EXIT_FAILURE);
     default:
-        std::cerr << "Access to Processor Counter Monitor has denied (Unknown error).\n";
+        std::cerr << "Access to Intel(r) Performance Counter Monitor has denied (Unknown error).\n";
         exit(EXIT_FAILURE);
     }
 }
@@ -3174,7 +3202,7 @@ PCM::ErrorCode PCM::programCoreCounters(const int i /* core */,
                 }
             }
 
-            if (programPerfEvent(e, PERF_GEN_EVENT_0_POS + j, std::string("generic event #") + std::to_string(i)) == false)
+            if (programPerfEvent(e, PERF_GEN_EVENT_0_POS + j, std::string("generic event #") + std::to_string(j) + std::string(" on core #") + std::to_string(i)) == false)
             {
                 return PCM::UnknownError;
             }
@@ -3259,10 +3287,11 @@ PCM::ErrorCode PCM::programCoreCounters(const int i /* core */,
                     }
                 }
                 EventSelectRegister reg;
-                setEvent(reg, eventSel, umask);
+                reg.fields.event_select = eventSel;
+                reg.fields.umask = umask;
                 perf_event_attr e = PCM_init_perf_event_attr();
                 e.type = PERF_TYPE_RAW;
-                e.config = (1ULL << 63ULL) + reg.value;
+                e.config = reg.value;
                 // std::cerr << "Programming perf event " << std::hex << e.config << "\n";
                 if (programPerfEvent(e, event.second, std::string("event ") + event.first + " " + eventDesc) == false)
                 {
@@ -3882,6 +3911,8 @@ const char * PCM::getUArchCodename(const int32 cpu_model_param) const
             return "Tiger Lake";
         case ADL:
             return "Alder Lake";
+        case RPL:
+            return "Raptor Lake";
         case SKX:
             if (cpu_model_param >= 0)
             {
@@ -4078,6 +4109,17 @@ void PCM::cleanupRDT(const bool silent)
 
 void PCM::setOutput(const std::string filename, const bool cerrToo)
 {
+     const auto pos = filename.find_last_of("/");
+     if (pos != std::string::npos) {
+         const std::string dir_name = filename.substr(0, pos);
+         struct stat info;
+         if (stat(dir_name.c_str(), &info) != 0)
+         {
+             std::cerr << "Output directory: " << dir_name << " doesn't exist\n";
+             exit(EXIT_FAILURE);
+         }
+     }
+
      outfile = new std::ofstream(filename.c_str());
      backup_ofile = std::cout.rdbuf();
      std::cout.rdbuf(outfile->rdbuf());
@@ -4283,6 +4325,7 @@ void PCM::readPerfData(uint32 core, std::vector<uint64> & outData)
         }
         uint64 data[1 + PERF_MAX_COUNTERS];
         const int32 bytes2read = sizeof(uint64) * (1 + num_counters);
+        assert(num_counters <= PERF_MAX_COUNTERS);
         int result = ::read(perfEventHandle[core][leader], data, bytes2read);
         // data layout: nr counters; counter 0, counter 1, counter 2,...
         if (result != bytes2read)
@@ -4295,7 +4338,17 @@ void PCM::readPerfData(uint32 core, std::vector<uint64> & outData)
             std::cerr << "Number of counters read from perf is wrong. Elements read: " << data[0] << "\n";
         }
         else
-        {  // copy all counters, they start from position 1 in data
+        {
+            /*
+            if (core == 0)
+            {
+                std::unique_lock<std::mutex> _(instanceCreationMutex);
+                std::cerr << "DEBUG: perf raw: " << std::dec;
+                for (uint32 p=0; p < (1 + num_counters) ; ++p) std::cerr << data[p] << " ";
+                std::cerr << "\n";
+            }
+            */
+            // copy all counters, they start from position 1 in data
             std::copy((data + 1), (data + 1) + data[0], outData.begin());
         }
     };
@@ -4380,7 +4433,7 @@ void BasicCounterState::readAndAggregate(std::shared_ptr<SafeMsrHandle> msr)
             cBackendBoundSlots =    perfData[m->perfTopDownPos[PCM::PERF_TOPDOWN_BACKEND_POS]];
             cRetiringSlots =        perfData[m->perfTopDownPos[PCM::PERF_TOPDOWN_RETIRING_POS]];
             cAllSlotsRaw =          perfData[m->perfTopDownPos[PCM::PERF_TOPDOWN_SLOTS_POS]];
-//          if (core_id == 0) std::cout << "DEBUG: "<< cAllSlotsRaw << " " << cFrontendBoundSlots << " " << cBadSpeculationSlots << " " << cBackendBoundSlots << " " << cRetiringSlots << std::endl;
+//          if (core_id == 0) std::cout << "DEBUG: All: "<< cAllSlotsRaw << " FE: " << cFrontendBoundSlots << " BAD-SP: " << cBadSpeculationSlots << " BE: " << cBackendBoundSlots << " RET: " << cRetiringSlots << std::endl;
         }
     }
     else
@@ -4509,14 +4562,14 @@ PCM::ErrorCode PCM::programServerUncoreLatencyMetrics(bool enable_pmm)
     if (enable_pmm == false)
     {   //DDR is false
         if (ICX == cpu_model)
-	{ 
+	{
             DDRConfig[0] = MC_CH_PCI_PMON_CTL_EVENT(0x80) + MC_CH_PCI_PMON_CTL_UMASK(1);  // DRAM RPQ occupancy
             DDRConfig[1] = MC_CH_PCI_PMON_CTL_EVENT(0x10) + MC_CH_PCI_PMON_CTL_UMASK(1);  // DRAM RPQ Insert
             DDRConfig[2] = MC_CH_PCI_PMON_CTL_EVENT(0x81) + MC_CH_PCI_PMON_CTL_UMASK(0);  // DRAM WPQ Occupancy
             DDRConfig[3] = MC_CH_PCI_PMON_CTL_EVENT(0x20) + MC_CH_PCI_PMON_CTL_UMASK(0);  // DRAM WPQ Insert
-	    
+
 	} else {
-	    
+
             DDRConfig[0] = MC_CH_PCI_PMON_CTL_EVENT(0x80) + MC_CH_PCI_PMON_CTL_UMASK(0);  // DRAM RPQ occupancy
             DDRConfig[1] = MC_CH_PCI_PMON_CTL_EVENT(0x10) + MC_CH_PCI_PMON_CTL_UMASK(0);  // DRAM RPQ Insert
             DDRConfig[2] = MC_CH_PCI_PMON_CTL_EVENT(0x81) + MC_CH_PCI_PMON_CTL_UMASK(0);  // DRAM WPQ Occupancy
@@ -7466,7 +7519,7 @@ void ServerPCICFGUncore::cleanupMemTest(const ServerPCICFGUncore::MemTestParam &
         munmap(b, memBufferBlockSize);
 #elif defined(_MSC_VER)
         VirtualFree(b, memBufferBlockSize, MEM_RELEASE);
-#elif defined(__FreeBSD__)
+#elif defined(__FreeBSD__) || defined(__APPLE__)
         (void) b;                  // avoid the unused variable warning
         (void) memBufferBlockSize; // avoid the unused variable warning
 #else

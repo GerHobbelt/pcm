@@ -23,6 +23,7 @@
 #undef PCM_UNCORE_PMON_BOX_CHECK_STATUS // debug only
 
 #include "types.h"
+#include "topologyentry.h"
 #include "msr.h"
 #include "pci.h"
 #include "bw.h"
@@ -61,7 +62,9 @@
 #endif
 #endif
 
+#ifdef __linux__
 #include "resctrl.h"
+#endif
 
 namespace pcm {
 
@@ -83,38 +86,6 @@ class SystemRoot;
 
         A set of performance monitoring routines for recent Intel CPUs
 */
-
-struct PCM_API TopologyEntry // describes a core
-{
-    int32 os_id;
-    int32 thread_id;
-    int32 core_id;
-    int32 tile_id; // tile is a constalation of 1 or more cores sharing salem L2 cache. Unique for entire system
-    int32 socket;
-    int32 native_cpu_model = -1;
-    enum CoreType
-    {
-        Atom = 0x20,
-        Core = 0x40,
-        Invalid = -1
-    };
-    CoreType core_type = Invalid;
-
-    TopologyEntry() : os_id(-1), thread_id (-1), core_id(-1), tile_id(-1), socket(-1) { }
-    const char* getCoreTypeStr()
-    {
-        switch (core_type)
-        {
-            case Atom:
-                return "Atom";
-            case Core:
-                return "Core";
-            case Invalid:
-                return "invalid";
-        }
-        return "unknown";
-    }
-};
 
 class HWRegister
 {
@@ -870,7 +841,7 @@ private:
         PERF_TOPDOWN_RETIRING_POS = PERF_TOPDOWN_SLOTS_POS + 4
     };
 
-    std::unordered_map<int, int> perfTopDownPos;
+    std::array<int, (PERF_TOPDOWN_RETIRING_POS + 1)> perfTopDownPos;
 
     enum {
         PERF_GROUP_LEADER_COUNTER = PERF_INST_RETIRED_POS,
@@ -1188,6 +1159,7 @@ public:
             switch (cpu_model)
             {
             case ADL:
+            case RPL:
                 if (topology[coreID].core_type == TopologyEntry::Atom)
                 {
                     return std::make_pair(OFFCORE_RESPONSE_0_EVTNR, event + 1);
@@ -1199,6 +1171,7 @@ public:
        switch (cpu_model)
        {
        case ADL: // ADL big core (GLC)
+       case RPL:
            useGLCOCREvent = true;
            break;
        }
@@ -1392,6 +1365,10 @@ public:
         TGL_1 = 141,
         ADL = 151,
         ADL_1 = 154,
+        RPL = 0xb7,
+        RPL_1 = 0xba,
+        RPL_2 = 0xbf,
+        RPL_3 = 0xbe,
         BDX = 79,
         KNL = 87,
         SKL = 94,
@@ -1580,6 +1557,7 @@ public:
         switch (cpu_model)
         {
         case ADL:
+        case RPL:
             return 6;
         case SNOWRIDGE:
             return 4;
@@ -1866,6 +1844,7 @@ public:
                  || cpu_model == PCM::SKX
                  || cpu_model == PCM::ICX
                  || cpu_model == PCM::ADL
+                 || cpu_model == PCM::RPL
                );
     }
 
@@ -2090,6 +2069,8 @@ public:
             || cpu_model == IVY_BRIDGE
             || cpu_model == HASWELL
             || cpu_model == BROADWELL
+            || cpu_model == ADL
+            || cpu_model == RPL
             || useSKLPath()
             ;
     }
@@ -3348,7 +3329,7 @@ uint64 getL2CacheMisses(const CounterStateType & before, const CounterStateType 
     auto pcm = PCM::getInstance();
     if (pcm->isL2CacheMissesAvailable() == false) return 0ULL;
     const auto cpu_model = pcm->getCPUModel();
-    if (pcm->useSkylakeEvents() || cpu_model == PCM::SNOWRIDGE || cpu_model == PCM::ADL) {
+    if (pcm->useSkylakeEvents() || cpu_model == PCM::SNOWRIDGE || cpu_model == PCM::ADL || cpu_model == PCM::RPL) {
         return after.Event[BasicCounterState::SKLL2MissPos] - before.Event[BasicCounterState::SKLL2MissPos];
     }
     if (pcm->isAtom() || cpu_model == PCM::KNL)
@@ -3443,7 +3424,7 @@ uint64 getL3CacheHitsSnoop(const CounterStateType & before, const CounterStateTy
     auto pcm = PCM::getInstance();
     if (!pcm->isL3CacheHitsSnoopAvailable()) return 0;
     const auto cpu_model = pcm->getCPUModel();
-    if (cpu_model == PCM::SNOWRIDGE || cpu_model == PCM::ADL)
+    if (cpu_model == PCM::SNOWRIDGE || cpu_model == PCM::ADL || cpu_model == PCM::RPL)
     {
         const int64 misses = getL3CacheMisses(before, after);
         const int64 refs = after.Event[BasicCounterState::ArchLLCRefPos] - before.Event[BasicCounterState::ArchLLCRefPos];
