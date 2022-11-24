@@ -60,6 +60,13 @@ if [ "$?" -ne "0" ]; then
     exit 1
 fi
 
+echo Testing pcm-memory with csv output
+./pcm-memory -csv=pcm-memory.csv -- sleep 1
+if [ "$?" -ne "0" ]; then
+    echo "Error in pcm-memory"
+    exit 1
+fi
+
 echo Testing pcm-memory with -rank
 ./pcm-memory -rank=1 -- sleep 1
 if [ "$?" -ne "0" ]; then
@@ -71,6 +78,13 @@ echo Testing pcm-memory with -rank and -csv
 ./pcm-memory -rank=1 -csv -- sleep 1
 if [ "$?" -ne "0" ]; then
     echo "Error in pcm-memory"
+    exit 1
+fi
+
+echo Testing pcm-iio --list
+./pcm-iio --list
+if [ "$?" -ne "0" ]; then
+    echo "Error in pcm-iio"
     exit 1
 fi
 
@@ -179,8 +193,8 @@ fi
 echo Testing pcm-raw with event files
 echo   Download necessary files
 if [ ! -f "mapfile.csv" ]; then
-    echo "Downloading https://download.01.org/perfmon/mapfile.csv"
-    wget -q --timeout=10 https://download.01.org/perfmon/mapfile.csv
+    echo "Downloading https://raw.githubusercontent.com/intel/perfmon/main/mapfile.csv"
+    wget -q --timeout=10 https://raw.githubusercontent.com/intel/perfmon/main/mapfile.csv
     if [ "$?" -ne "0" ]; then
         echo "Could not download mapfile.csv"
         exit 1
@@ -206,22 +220,21 @@ done
 for DIR in $DIRS
 do
     if [ ! -d $DIR ]; then
-        mkdir $DIR
+        mkdir -p $DIR
         cd $DIR
 
-        DIRPATH="https://download.01.org/perfmon/${DIR}/"
-        echo "Downloading all files from ${DIRPATH}"
+        DIRPATH="https://github.com/intel/perfmon.git"
+        echo "Downloading all files from ${DIRPATH} using git"
 
-        wget -q --timeout=10 -r -l1 --no-parent -A "*.json" $DIRPATH
+        git clone $DIRPATH
         if [ "$?" -ne "0" ]; then
             cd ..
-            echo "Could not download $DIR"
+            echo "Could not download ${DIRPATH}"
             exit 1
         fi
-        wget -q --timeout=10 -r -l1 --no-parent -A "*.tsv" $DIRPATH
-        mv download.01.org/perfmon/${DIR}/* .
-        rm -rf download.01.org
-        cd ..
+        mv perfmon/${DIR}/* .
+        rm -rf perfmon
+        cd ../..
     fi
 done
 
@@ -246,7 +259,7 @@ do
     CMD="find . -type f -regex '\.\/${TYPE}_v[0-9]*\.[0-9]*.tsv'"
     TSVFILE=$(eval $CMD)
     TSVFILE="${TSVFILE:2}"
-    cd ..
+    cd ../..
     CMD="sed -i 's/${BASE}/${TSVFILE}/g' mapfile.csv"
     eval $CMD
 done
@@ -270,6 +283,7 @@ if [ ! -f "event_file_test.txt" ]; then
 # group 1
 INST_RETIRED.ANY
 CPU_CLK_UNHALTED.REF_TSC
+MEM_TRANS_RETIRED.LOAD_LATENCY_GT_4
 UNC_CHA_DIR_LOOKUP.SNP
 UNC_CHA_DIR_LOOKUP.NO_SNP
 UNC_M_CAS_COUNT.RD
@@ -278,6 +292,7 @@ UNC_UPI_CLOCKTICKS
 UNC_UPI_TxL_FLITS.ALL_DATA
 UNC_UPI_TxL_FLITS.NON_DATA
 UNC_UPI_L1_POWER_CYCLES
+UNC_CHA_TOR_INSERTS.IA_MISS
 MSR_EVENT:msr=0x19C:type=STATIC:scope=THREAD
 MSR_EVENT:msr=0x1A2:type=STATIC:scope=THREAD
 MSR_EVENT:msr=0x34:type=FREERUN:scope=PACKAGE
@@ -294,6 +309,7 @@ UNC_M2M_DIRECTORY_UPDATE.ANY
 UNC_M_CAS_COUNT.RD
 UNC_M_CAS_COUNT.WR
 imc/fixed,name=DRAM_CLOCKS
+UNC_CHA_TOR_INSERTS.IA_MISS:tid=0x20
 UNC_M_PRE_COUNT.PAGE_MISS
 UNC_UPI_TxL0P_POWER_CYCLES
 UNC_UPI_RxL0P_POWER_CYCLES

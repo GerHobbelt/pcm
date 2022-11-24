@@ -52,6 +52,7 @@ void print_usage(const string & progname)
     cout << " Supported <options> are: \n";
     cout << "  -h    | --help      | /h               => print this help and exit\n";
     cout << "  -silent                                => silence information output and print only measurements\n";
+    cout << "  --version                              => print application version\n";
     cout << "  -e event1 [-e event2] [-e event3] ..   => list of custom events to monitor\n";
     cout << "  -pid PID | /pid PID                    => collect core metrics only for specified process ID\n";
     cout << "  -r    | --reset     | /reset           => reset PMU configuration (at your own risk)\n";
@@ -63,7 +64,7 @@ void print_usage(const string & progname)
     cout << "  event description example: -e core/config=0x30203,name=LD_BLOCKS.STORE_FORWARD/ -e core/fixed,config=0x333/ \n";
     cout << "                             -e cha/config=0,name=UNC_CHA_CLOCKTICKS/ -e imc/fixed,name=DRAM_CLOCKS/\n";
 #ifdef PCM_SIMDJSON_AVAILABLE
-    cout << "                             -e NAME where the NAME is an event from https://download.01.org/perfmon/ event lists\n";
+    cout << "                             -e NAME where the NAME is an event from https://github.com/intel/perfmon event lists\n";
     cout << "  -ep path | /ep path                    => path to event list directory (default is the current directory)\n";
 #endif
     cout << "  -yc   | --yescores  | /yc              => enable specific cores to output\n";
@@ -196,7 +197,7 @@ bool initPMUEventMap()
     if (!in.is_open())
     {
         cerr << "ERROR: File " << mapfilePath << " can't be open. \n";
-        cerr << "       Download it from https://download.01.org/perfmon/" << mapfile << " \n";
+        cerr << "       Download it from https://raw.githubusercontent.com/intel/perfmon/main/" << mapfile << " \n";
         return false;
     }
     int32 FMSPos = -1;
@@ -261,7 +262,7 @@ bool initPMUEventMap()
         std::string path;
         auto printError = [&evfile]()
         {
-            cerr << "Make sure you have downloaded " << evfile.second << " from https://download.01.org/perfmon/" + evfile.second + " \n";
+            cerr << "Make sure you have downloaded " << evfile.second << " from https://raw.githubusercontent.com/intel/perfmon/main/" + evfile.second + " \n";
         };
         try {
 
@@ -289,7 +290,12 @@ bool initPMUEventMap()
 
                 if (path.find(".json") != std::string::npos) {
                     JSONparsers.push_back(std::make_shared<simdjson::dom::parser>());
-                    for (simdjson::dom::object eventObj : JSONparsers.back()->load(path)) {
+                    auto JSONObjects = JSONparsers.back()->load(path);
+                    if (JSONObjects["Header"].error() != NO_SUCH_FIELD)
+                    {
+                        JSONObjects = JSONObjects["Events"];
+                    }
+                    for (simdjson::dom::object eventObj : JSONObjects) {
                         // cout << "Event ----------------\n";
                         const std::string EventName{eventObj["EventName"].get_c_str()};
                         if (EventName.empty())
@@ -615,6 +621,16 @@ bool addEventFromDB(PCM::RawPMUConfigs& curPMUConfigs, string fullEventStr)
                 PMUDeclObj = (*PMURegisterDeclarations)[pmuName]["programmable"].get_object();
             }
             auto& myPMUConfigs = fixed ? curPMUConfigs[pmuName].fixed : curPMUConfigs[pmuName].programmable;
+            simdjson::dom::object MSRObject;
+            auto setMSRValue = [&setConfig,&MSRObject,&config,&myPMUConfigs](const string & valueStr)
+            {
+                const auto value = read_number(valueStr.c_str());
+                const auto position = int64_t(MSRObject["Position"]);
+                // update the first event
+                setConfig(myPMUConfigs.empty() ? config : myPMUConfigs.front(), MSRObject, value, position);
+                // update the current as well for display
+                setConfig(config, MSRObject, value, position);
+            };
             for (const auto & registerKeyValue : PMUDeclObj)
             {
                 // cout << "Setting " << registerKeyValue.key << " : " << registerKeyValue.value << "\n";
@@ -643,12 +659,9 @@ bool addEventFromDB(PCM::RawPMUConfigs& curPMUConfigs, string fullEventStr)
                         MSRIndexStr = MSRIndexes[offcoreEventIndex];
                     }
                     // cout << " MSR field " << fieldNameStr << " value is " << MSRIndexStr << " (" << read_number(MSRIndexStr.c_str()) << ") offcore=" << offcore << "\n";
-                    simdjson::dom::object MSRObject = registerKeyValue.value[MSRIndexStr];
+                    MSRObject = registerKeyValue.value[MSRIndexStr];
                     const string msrValueStr = EventMap::getField(eventStr, "MSRValue");
-                    // update the first event
-                    setConfig(myPMUConfigs.empty() ? config : myPMUConfigs.front(), MSRObject, read_number(msrValueStr.c_str()), int64_t(MSRObject["Position"]));
-                    // update the current as well for display
-                    setConfig(config, MSRObject, read_number(msrValueStr.c_str()), int64_t(MSRObject["Position"]));
+                    setMSRValue(msrValueStr);
                     continue;
                 }
                 const int64_t position = int64_t(fieldDescriptionObj["Position"]);
@@ -770,9 +783,18 @@ bool addEventFromDB(PCM::RawPMUConfigs& curPMUConfigs, string fullEventStr)
                 {
                     setField("Threshold", read_number(assignment[1].c_str()));
                 }
+                else if (assignment.size() == 2 && assignment[0] == "tid")
+                {
+                    setField("TIDEnable", 1);
+                    setField("TID", read_number(assignment[1].c_str()));
+                }
                 else if (assignment.size() == 2 && assignment[0] == "umask_ext")
                 {
                     setField("UMaskExt", read_number(assignment[1].c_str()));
+                }
+                else if (assignment.size() == 2 && assignment[0] == "ocr_msr_val")
+                {
+                    setMSRValue(assignment[1]);
                 }
                 else
                 {
@@ -1410,6 +1432,14 @@ void printTransposed(const PCM::RawPMUConfigs& curPMUConfigs,
                     [&]() { printUncoreRows([](const uint32 u, const uint32 i, const ServerUncoreCounterState& before, const ServerUncoreCounterState& after) { return getCBOCounter(u, i, before, after); }, (uint32)m->getMaxNumOfCBoxes(), "C");
                     });
             }
+            else if (type == "mdf")
+            {
+                choose(outputType,
+                    [&]() { printUncoreRows(nullptr, (uint32) m->getMaxNumOfMDFs(), "MDF"); },
+                    [&]() { printUncoreRows(nullptr, (uint32) m->getMaxNumOfMDFs(), type); },
+                    [&]() { printUncoreRows([](const uint32 u, const uint32 i, const ServerUncoreCounterState& before, const ServerUncoreCounterState& after) { return getMDFCounter(u, i, before, after); }, (uint32)m->getMaxNumOfMDFs(), "MDF");
+                    });
+            }
             else if (type == "irp")
             {
                 choose(outputType,
@@ -1698,6 +1728,24 @@ void print(const PCM::RawPMUConfigs& curPMUConfigs,
                 }
             }
         }
+        else if (type == "mdf")
+        {
+            for (uint32 s = 0; s < m->getNumSockets(); ++s)
+            {
+                for (uint32 mdf = 0; mdf < m->getMaxNumOfMDFs(); ++mdf)
+                {
+                    int i = 0;
+                    for (auto& event : events)
+                    {
+                        choose(outputType,
+                            [s, mdf]() { cout << "SKT" << s << "MDF" << mdf << separator; },
+                            [&event, &i]() { if (event.second.empty()) cout << "MDFEvent" << i << separator;  else cout << event.second << separator; },
+                            [&]() { cout << getMDFCounter(mdf, i, BeforeUncoreState[s], AfterUncoreState[s]) << separator; });
+                        ++i;
+                    }
+                }
+            }
+        }
         else if (type == "irp")
         {
             for (uint32 s = 0; s < m->getNumSockets(); ++s)
@@ -1809,6 +1857,9 @@ void printAll(const PCM::RawPMUConfigs& curPMUConfigs,
 
 int main(int argc, char* argv[])
 {
+    if(print_version(argc, argv))
+        exit(EXIT_SUCCESS);
+
     parseParam(argc, argv, "out", [](const char* p) {
             const string filename{ p };
             if (!filename.empty()) {
@@ -1855,7 +1906,11 @@ int main(int argc, char* argv[])
         argc--;
         string arg_value;
 
-        if (check_argument_equals(*argv, {"--help", "-h", "/h"}))
+        if (*argv == nullptr)
+        {
+            continue;
+        }
+        else if (check_argument_equals(*argv, {"--help", "-h", "/h"}))
         {
             print_usage(program);
             exit(EXIT_FAILURE);
@@ -1983,7 +2038,13 @@ int main(int argc, char* argv[])
         {
             argv++;
             argc--;
-            if (addEvents(PMUConfigs, *argv) == false)
+            const auto p = *argv;
+            if (p == nullptr)
+            {
+                cerr << "ERROR: no parameter value provided for 'el' option\n";
+                exit(EXIT_FAILURE);
+            }
+            else if (addEvents(PMUConfigs, p) == false)
             {
                 exit(EXIT_FAILURE);
             }
@@ -1993,7 +2054,12 @@ int main(int argc, char* argv[])
         {
             argv++;
             argc--;
-            if (addEvent(PMUConfigs[0], *argv) == false)
+            const auto p = *argv;
+            if (p == nullptr)
+            {
+                cerr << "ERROR: no parameter value provided for 'e' option\n";
+                exit(EXIT_FAILURE);
+            } else if (addEvent(PMUConfigs[0], p) == false)
             {
                 exit(EXIT_FAILURE);
             }

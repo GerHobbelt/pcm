@@ -3,9 +3,9 @@
 
 
 # All pcm-* executables
-set(PROJECT_NAMES pcm pcm-numa pcm-latency pcm-power pcm-msr pcm-memory pcm-tsx pcm-pcie pcm-core pcm-iio pcm-lspci pcm-pcicfg pcm-mmio pcm-raw)
+set(PROJECT_NAMES pcm pcm-numa pcm-latency pcm-power pcm-msr pcm-memory pcm-tsx pcm-pcie pcm-core pcm-iio pcm-lspci pcm-pcicfg pcm-mmio pcm-raw pcm-accel)
 
-file(GLOB COMMON_SOURCES msr.cpp cpucounters.cpp pci.cpp mmio.cpp bw.cpp utils.cpp topology.cpp debug.cpp threadpool.cpp)
+file(GLOB COMMON_SOURCES msr.cpp cpucounters.cpp pci.cpp mmio.cpp bw.cpp utils.cpp topology.cpp debug.cpp threadpool.cpp uncore_pmu_discovery.cpp)
 
 if (APPLE)
   file(GLOB UNUX_SOURCES dashboard.cpp)
@@ -16,12 +16,9 @@ endif()
 if(UNIX)  # LINUX, FREE_BSD, APPLE
     if (NOT APPLE)
       set(CMAKE_EXE_LINKER_FLAGS_RELEASE "${CMAKE_EXE_LINKER_FLAGS} -s")  # --strip-unneeded for packaging
+      list(APPEND PROJECT_NAMES pcm-sensor-server)
     endif()
-
     list(APPEND PROJECT_NAMES pcm-sensor)
-    if(LINUX)
-        list(APPEND PROJECT_NAMES pcm-sensor-server)
-    endif()
 
     # libpcm.a
     add_library(PCM_STATIC STATIC ${COMMON_SOURCES} ${UNUX_SOURCES})
@@ -99,7 +96,7 @@ if((CMAKE_CXX_COMPILER_ID STREQUAL "GNU"   AND CMAKE_CXX_COMPILER_VERSION VERSIO
      message(WARNING
            " ${CMAKE_CXX_COMPILER} ${CMAKE_CXX_COMPILER_VERSION} is incompartible with simdjson features' requirements.\n"
            " Refer to simdjson support matrix - https://github.com/simdjson/simdjson/blob/master/doc/basics.md .\n"
-           " Parsing events from 01.org/perfmon won't be supported.")
+           " Parsing events from https://github.com/intel/perfmon won't be supported.")
         set(SIMDJSON_IS_APPLICABLE FALSE)
 endif()
 

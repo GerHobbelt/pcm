@@ -99,6 +99,7 @@ void print_usage(const string & progname)
     cout << " Supported <options> are: \n";
     cout << "  -h    | --help  | /h               => print this help and exit\n";
     cout << "  -silent                            => silence information output and print only measurements\n";
+    cout << "  --version                          => print application version\n";
     cout << "  -i[=number] | /i[=number]          => allow to determine number of iterations\n";
 //    cout << "  -csv[=file.csv] | /csv[=file.csv]  => output compact CSV format to screen or\n"
 //         << "                                        to a file, in case filename is provided\n";
@@ -133,6 +134,9 @@ void print_usage(const string & progname)
 
 int main(int argc, char * argv[])
 {
+    if(print_version(argc, argv))
+        exit(EXIT_SUCCESS);
+
     null_stream nullStream;
     check_and_set_silent(argc, argv, nullStream);
 
@@ -452,13 +456,13 @@ int main(int argc, char * argv[])
                           << "; PCUClocks: " << getPCUClocks(BeforeState[socket], AfterState[socket])
                           << "; Thermal freq limit cycles: " << getNormalizedPCUCounter(1, BeforeState[socket], AfterState[socket]) * 100. << " %"
                           << "; Power freq limit cycles:" << getNormalizedPCUCounter(2, BeforeState[socket], AfterState[socket]) * 100. << " %";
-                if(cpu_model != PCM::SKX && cpu_model != PCM::ICX && cpu_model != PCM::SNOWRIDGE)
+                if(cpu_model != PCM::SKX && cpu_model != PCM::ICX && cpu_model != PCM::SNOWRIDGE && cpu_model != PCM::SPR)
                     cout << "; Clipped freq limit cycles:" << getNormalizedPCUCounter(3, BeforeState[socket], AfterState[socket]) * 100. << " %";
                 cout << "\n";
                 break;
 
             case 4:
-                if (cpu_model == PCM::SKX || cpu_model == PCM::ICX || cpu_model == PCM::SNOWRIDGE)
+                if (cpu_model == PCM::SKX || cpu_model == PCM::ICX || cpu_model == PCM::SNOWRIDGE || cpu_model == PCM::SPR)
                 {
                     cout << "This PCU profile is not supported on your processor\n";
                     break;
@@ -488,13 +492,21 @@ int main(int argc, char * argv[])
                     cout << "; PC1e+ residency: " << getNormalizedPCUCounter(0, BeforeState[socket], AfterState[socket], m) * 100. << " %"
                         "; PC1e+ transition count: " << getPCUCounter(1, BeforeState[socket], AfterState[socket]) << " ";
 
-                if (cpu_model == PCM::IVYTOWN || cpu_model == PCM::HASWELLX || PCM::BDX_DE == cpu_model || PCM::SKX == cpu_model || PCM::ICX == cpu_model || cpu_model == PCM::SNOWRIDGE)
+                switch (cpu_model)
                 {
-                    cout << "; PC2 residency: " << getPackageCStateResidency(2, BeforeState[socket], AfterState[socket]) * 100. << " %";
-                    cout << "; PC2 transitions: " << getPCUCounter(2, BeforeState[socket], AfterState[socket]) << " ";
-                    cout << "; PC3 residency: " << getPackageCStateResidency(3, BeforeState[socket], AfterState[socket]) * 100. << " %";
-                    cout << "; PC6 residency: " << getPackageCStateResidency(6, BeforeState[socket], AfterState[socket]) * 100. << " %";
-                    cout << "; PC6 transitions: " << getPCUCounter(3, BeforeState[socket], AfterState[socket]) << " ";
+                    case PCM::IVYTOWN:
+                    case PCM::HASWELLX:
+                    case PCM::BDX_DE:
+                    case PCM::SKX:
+                    case PCM::ICX:
+                    case PCM::SNOWRIDGE:
+                    case PCM::SPR:
+                        cout << "; PC2 residency: " << getPackageCStateResidency(2, BeforeState[socket], AfterState[socket]) * 100. << " %";
+                        cout << "; PC2 transitions: " << getPCUCounter(2, BeforeState[socket], AfterState[socket]) << " ";
+                        cout << "; PC3 residency: " << getPackageCStateResidency(3, BeforeState[socket], AfterState[socket]) * 100. << " %";
+                        cout << "; PC6 residency: " << getPackageCStateResidency(6, BeforeState[socket], AfterState[socket]) * 100. << " %";
+                        cout << "; PC6 transitions: " << getPCUCounter(3, BeforeState[socket], AfterState[socket]) << " ";
+                        break;
                 }
 
                 cout << "\n";
