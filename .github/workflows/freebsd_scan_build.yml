@@ -12,7 +12,7 @@ jobs:
     runs-on: macos-12
 
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v3
       with:
         submodules: recursive
     - name: clang scan build in FreeBSD VM
@@ -31,4 +31,4 @@ jobs:
           freebsd-version
           scan-build cmake -B build -DCMAKE_INSTALL_PREFIX=.
           cd build
-          scan-build --exclude src/simdjson --status-bugs gmake -j
+          scan-build --exclude src/simdjson --status-bugs gmake

@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: BSD-3-Clause
-// Copyright (c) 2009-2020, Intel Corporation
+// Copyright (c) 2009-2022, Intel Corporation
 // written by Roman Dementiev
 //            Thomas Willhalm
+//            and others
 
 #ifndef CPUCOUNTERS_HEADER
 #define CPUCOUNTERS_HEADER
@@ -344,7 +345,8 @@ class ServerPCICFGUncore
     UncorePMUVector m3upiPMUs;
     UncorePMUVector m2mPMUs;
     UncorePMUVector haPMUs;
-    std::vector<UncorePMUVector*> allPMUs{ &imcPMUs, &edcPMUs, &xpiPMUs, &m3upiPMUs , &m2mPMUs, &haPMUs };
+    UncorePMUVector hbm_m2mPMUs;
+    std::vector<UncorePMUVector*> allPMUs{ &imcPMUs, &edcPMUs, &xpiPMUs, &m3upiPMUs , &m2mPMUs, &haPMUs, &hbm_m2mPMUs };
     std::vector<uint64> qpi_speed;
     std::vector<uint32> num_imc_channels; // number of memory channels in each memory controller
     std::vector<std::pair<uint32, uint32> > XPIRegisterLocation; // (device, function)
@@ -353,6 +355,7 @@ class ServerPCICFGUncore
     std::vector<std::pair<uint32, uint32> > EDCRegisterLocation; // EDCRegisterLocation: (device, function)
     std::vector<std::pair<uint32, uint32> > M2MRegisterLocation; // M2MRegisterLocation: (device, function)
     std::vector<std::pair<uint32, uint32> > HARegisterLocation;  // HARegisterLocation: (device, function)
+    std::vector<std::pair<uint32, uint32> > HBM_M2MRegisterLocation; // HBM_M2MRegisterLocation: (device, function)
 
     static std::vector<std::pair<uint32, uint32> > socket2iMCbus;
     static std::vector<std::pair<uint32, uint32> > socket2UPIbus;
@@ -361,7 +364,7 @@ class ServerPCICFGUncore
     ServerPCICFGUncore();                                         // forbidden
     ServerPCICFGUncore(ServerPCICFGUncore &);                     // forbidden
     ServerPCICFGUncore & operator = (const ServerPCICFGUncore &); // forbidden
-    PciHandleType * createIntelPerfMonDevice(uint32 groupnr, int32 bus, uint32 dev, uint32 func, bool checkVendor = false);
+    static PciHandleType * createIntelPerfMonDevice(uint32 groupnr, int32 bus, uint32 dev, uint32 func, bool checkVendor = false);
     void programIMC(const uint32 * MCCntConfig);
     void programEDC(const uint32 * EDCCntConfig);
     void programM2M(const uint64 * M2MCntConfig);
@@ -381,6 +384,7 @@ class ServerPCICFGUncore
     void initBuses(uint32 socket_, const PCM * pcm);
     void initRegisterLocations(const PCM * pcm);
     uint64 getPMUCounter(std::vector<UncorePMU> & pmu, const uint32 id, const uint32 counter);
+    bool HBMAvailable() const;
 
 public:
     enum EventPosition {
@@ -466,9 +470,9 @@ public:
     //! \brief Get number DRAM channel cycles
     //! \param channel channel number
     uint64 getDRAMClocks(uint32 channel);
-    //! \brief Get number MCDRAM channel cycles
+    //! \brief Get number HBM channel cycles
     //! \param channel channel number
-    uint64 getMCDRAMClocks(uint32 channel);
+    uint64 getHBMClocks(uint32 channel);
     //! \brief Direct read of memory controller PMU counter (counter meaning depends on the programming: power/performance/etc)
     //! \param channel channel number
     //! \param counter counter number
@@ -2026,9 +2030,14 @@ public:
                ;
     }
 
-    bool MCDRAMmemoryTrafficMetricsAvailable() const
+    bool HBMmemoryTrafficMetricsAvailable() const
     {
-        return (cpu_model == PCM::KNL);
+        return server_pcicfg_uncore.empty() == false && server_pcicfg_uncore[0].get() != nullptr && server_pcicfg_uncore[0]->HBMAvailable();
+    }
+
+    size_t getHBMCASTransferSize() const
+    {
+        return (SPR == cpu_model) ? 32ULL : 64ULL;
     }
 
     bool memoryIOTrafficMetricAvailable() const
@@ -2547,15 +2556,15 @@ uint64 getDRAMClocks(uint32 channel, const CounterStateType & before, const Coun
     return clk;
 }
 
-/*! \brief Returns MCDRAM clock ticks
-    \param channel MCDRAM channel number
+/*! \brief Returns HBM clock ticks
+    \param channel HBM channel number
     \param before CPU counter state before the experiment
     \param after CPU counter state after the experiment
 */
 template <class CounterStateType>
-uint64 getMCDRAMClocks(uint32 channel, const CounterStateType & before, const CounterStateType & after)
+uint64 getHBMClocks(uint32 channel, const CounterStateType & before, const CounterStateType & after)
 {
-    return after.MCDRAMClocks[channel] - before.MCDRAMClocks[channel];
+    return after.HBMClocks[channel] - before.HBMClocks[channel];
 }
 
 
@@ -2676,7 +2685,7 @@ uint64 getM2MCounter(uint32 controller, uint32 counter, const CounterStateType &
 template <class CounterStateType>
 uint64 getEDCCounter(uint32 channel, uint32 counter, const CounterStateType & before, const CounterStateType & after)
 {
-    if (PCM::getInstance()->MCDRAMmemoryTrafficMetricsAvailable())
+    if (PCM::getInstance()->HBMmemoryTrafficMetricsAvailable())
         return after.EDCCounter[channel][counter] - before.EDCCounter[channel][counter];
     return 0ULL;
 }
@@ -2922,7 +2931,7 @@ class ServerUncoreCounterState : public UncoreCounterState
 public:
     enum {
         maxControllers = 4,
-        maxChannels = 12,
+        maxChannels = 32,
         maxXPILinks = 6,
         maxCBOs = 128,
         maxMDFs = 128,
@@ -2951,7 +2960,7 @@ private:
     std::array<std::array<uint64, maxCounters>, maxIIOStacks> IRPCounter;
     std::array<uint64, maxCounters> UBOXCounter;
     std::array<uint64, maxChannels> DRAMClocks;
-    std::array<uint64, maxChannels> MCDRAMClocks;
+    std::array<uint64, maxChannels> HBMClocks;
     std::array<std::array<uint64, maxCounters>, maxChannels> MCCounter; // channel X counter
     std::array<std::array<uint64, maxCounters>, maxControllers> M2MCounter; // M2M/iMC boxes x counter
     std::array<std::array<uint64, maxCounters>, maxChannels> EDCCounter; // EDC controller X counter
@@ -2963,7 +2972,7 @@ private:
     template <class CounterStateType>
     friend uint64 getDRAMClocks(uint32 channel, const CounterStateType & before, const CounterStateType & after);
     template <class CounterStateType>
-    friend uint64 getMCDRAMClocks(uint32 channel, const CounterStateType & before, const CounterStateType & after);
+    friend uint64 getHBMClocks(uint32 channel, const CounterStateType & before, const CounterStateType & after);
     template <class CounterStateType>
     friend uint64 getMCCounter(uint32 channel, uint32 counter, const CounterStateType & before, const CounterStateType & after);
     template <class CounterStateType>
@@ -3009,7 +3018,7 @@ public:
         IRPCounter{{}},
         UBOXCounter{{}},
         DRAMClocks{{}},
-        MCDRAMClocks{{}},
+        HBMClocks{{}},
         MCCounter{{}},
         M2MCounter{{}},
         EDCCounter{{}},
@@ -3756,7 +3765,7 @@ uint64 getBytesWrittenToPMM(const CounterStateType & before, const CounterStateT
     return 0ULL;
 }
 
-/*! \brief Computes number of bytes read from MCDRAM memory controllers
+/*! \brief Computes number of bytes read from HBM memory controllers
 
     \param before CPU counter state before the experiment
     \param after CPU counter state after the experiment
@@ -3765,12 +3774,14 @@ uint64 getBytesWrittenToPMM(const CounterStateType & before, const CounterStateT
 template <class CounterStateType>
 uint64 getBytesReadFromEDC(const CounterStateType & before, const CounterStateType & after)
 {
-    if (PCM::getInstance()->MCDRAMmemoryTrafficMetricsAvailable())
-        return (after.UncEDCNormalReads - before.UncEDCNormalReads) * 64;
+    auto m = PCM::getInstance();
+    assert(m);
+    if (m->HBMmemoryTrafficMetricsAvailable())
+        return (after.UncEDCNormalReads - before.UncEDCNormalReads) * m->getHBMCASTransferSize();
     return 0ULL;
 }
 
-/*! \brief Computes number of bytes written to MCDRAM memory controllers
+/*! \brief Computes number of bytes written to HBM memory controllers
 
     \param before CPU counter state before the experiment
     \param after CPU counter state after the experiment
@@ -3779,8 +3790,10 @@ uint64 getBytesReadFromEDC(const CounterStateType & before, const CounterStateTy
 template <class CounterStateType>
 uint64 getBytesWrittenToEDC(const CounterStateType & before, const CounterStateType & after)
 {
-    if (PCM::getInstance()->MCDRAMmemoryTrafficMetricsAvailable())
-        return (after.UncEDCFullWrites - before.UncEDCFullWrites) * 64;
+    auto m = PCM::getInstance();
+    assert(m);
+    if (m->HBMmemoryTrafficMetricsAvailable())
+        return (after.UncEDCFullWrites - before.UncEDCFullWrites) * m->getHBMCASTransferSize();
     return 0ULL;
 }
 
