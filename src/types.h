@@ -113,6 +113,13 @@ constexpr auto MSR_FRONTEND = 0x3F7;
 #define MEM_LOAD_UOPS_RETIRED_L2_HIT_EVTNR (0xD1)
 #define MEM_LOAD_UOPS_RETIRED_L2_HIT_UMASK (0x02)
 
+// Haswell on-core events
+
+constexpr auto HSX_L2_RQSTS_MISS_EVTNR = 0x24;
+constexpr auto HSX_L2_RQSTS_MISS_UMASK = 0x3f;
+constexpr auto HSX_L2_RQSTS_REFERENCES_EVTNR = 0x24;
+constexpr auto HSX_L2_RQSTS_REFERENCES_UMASK = 0xff;
+
 // Skylake on-core events
 
 #define SKL_MEM_LOAD_RETIRED_L3_MISS_EVTNR (0xD1)
@@ -1420,8 +1427,8 @@ struct MCFGHeader
 #define SPR_IDX_DSA_REGISTER_DEV_ADDR  (1)
 #define SPR_IDX_DSA_REGISTER_FUNC_ADDR (0)
 
-#define SPR_IDX_HCx_REGISTER_DEV_ADDR  (0)
-#define SPR_IDX_HCx_REGISTER_FUNC_ADDR (0)
+#define SPR_IDX_QAT_REGISTER_DEV_ADDR  (0)
+#define SPR_IDX_QAT_REGISTER_FUNC_ADDR (0)
 
 //IDX accel perfmon register offset
 //The offset of register from DSA external architecture spec(intel-data-streaming-accelerator-preliminary-architecture-specification).
@@ -1442,6 +1449,18 @@ struct MCFGHeader
 #define SPR_IDX_PMON_FILTER_PGSZ_OFFSET(x)         (0x308 + ((x)*32))
 #define SPR_IDX_PMON_FILTER_XFERSZ_OFFSET(x)       (0x30C + ((x)*32))
 #define SPR_IDX_PMON_FILTER_ENG_OFFSET(x)          (0x310 + ((x)*32))
+
+//MSM device/func number and register offset from SPR register guide.
+constexpr auto SPR_MSM_DEV_ID                       = 0x09a6;
+constexpr auto SPR_MSM_DEV_ADDR                     = 0x03;
+constexpr auto SPR_MSM_FUNC_ADDR                    = 0x00;
+constexpr auto SPR_MSM_REG_CPUBUSNO_VALID_OFFSET    = 0x1a0;
+constexpr auto SPR_MSM_REG_CPUBUSNO0_OFFSET         = 0x190;
+constexpr auto SPR_MSM_REG_CPUBUSNO4_OFFSET         = 0x1c0;
+constexpr auto SPR_MSM_CPUBUSNO_MAX                 = 32;
+
+//SAD register offset from SPR register guide.
+constexpr auto SPR_SAD_REG_CTL_CFG_OFFSET           = 0x3F4;
 
 } // namespace pcm
 

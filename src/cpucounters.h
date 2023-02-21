@@ -285,9 +285,12 @@ class IDX_PMU
     uint32 cpu_model_;
     uint32 getCPUModel();
     bool perf_mode_;
+    uint32 numa_node_;
+    uint32 socket_id_;
     HWRegisterPtr resetControl;
     HWRegisterPtr freezeControl;
 public:
+    HWRegisterPtr generalControl;
     std::vector<HWRegisterPtr> counterControl;
     std::vector<HWRegisterPtr> counterValue;
     std::vector<HWRegisterPtr> counterFilterWQ;
@@ -297,8 +300,11 @@ public:
     std::vector<HWRegisterPtr> counterFilterXFERSZ; 
 
     IDX_PMU(const bool perfMode_,
+        const uint32 numaNode_,
+        const uint32 socketId_,
         const HWRegisterPtr& resetControl_,
         const HWRegisterPtr& freezeControl_,
+        const HWRegisterPtr& generalControl_,
         const std::vector<HWRegisterPtr> & counterControl,
         const std::vector<HWRegisterPtr> & counterValue,
         const std::vector<HWRegisterPtr> & counterFilterWQ,
@@ -308,7 +314,7 @@ public:
         const std::vector<HWRegisterPtr> & counterFilterXFERSZ
     );
 
-    IDX_PMU() : cpu_model_(0U), perf_mode_(0U) {}
+    IDX_PMU() : cpu_model_(0U), perf_mode_(false), numa_node_(0), socket_id_(0) {}
     size_t size() const { return counterControl.size(); }
     virtual ~IDX_PMU() {}
     bool valid() const
@@ -321,6 +327,8 @@ public:
     void unfreeze();
     void resetUnfreeze();
     bool getPERFMode();
+    uint32 getNumaNode() const;
+    uint32 getSocketId() const;
 };
 
 enum ServerUncoreMemoryMetrics
@@ -541,6 +549,7 @@ class SimpleCounterState
 public:
     SimpleCounterState() : data(0)
     { }
+    uint64 getRawData() const {return data;}
     virtual ~SimpleCounterState() { }
 };
 
@@ -799,8 +808,16 @@ public:
     {
         IDX_IAA = 0,
         IDX_DSA,
-        IDX_HCx,
+        IDX_QAT,
         IDX_MAX
+    };
+
+    enum IDX_OPERATION
+    {
+        QAT_TLM_STOP = 0,
+        QAT_TLM_START,
+        QAT_TLM_REFRESH,
+        QAT_TLM_MAX
     };
 
     struct SimplePCIeDevInfo
@@ -1056,6 +1073,12 @@ public:
     //! true if Linux perf for uncore PMU programming should AND can be used internally
     bool useLinuxPerfForUncore() const;
 
+    //! true if the CPU is hybrid
+    bool isHybrid() const
+    {
+        return hybrid;
+    }
+
     /*!
              \brief The system, sockets, uncores, cores and threads are structured like a tree
 
@@ -1120,8 +1143,13 @@ public:
     uint32 getNumOfIDXAccelDevs(int accel) const;
 
     //! \brief Returns the number of IDX counters
-    uint32 getMaxNumOfIDXAccelCtrs() const;
+    uint32 getMaxNumOfIDXAccelCtrs(int accel) const;
 
+    //! \brief Returns the numa node of IDX accel dev
+    uint32 getNumaNodeOfIDXAccelDev(uint32 accel, uint32 dev) const;
+
+    //! \brief Returns the socketid of IDX accel dev
+    uint32 getCPUSocketIdOfIDXAccelDev(uint32 accel, uint32 dev) const;
 
     /*!
             \brief Returns PCM object
@@ -1230,6 +1258,12 @@ public:
     };
     typedef std::map<std::string, RawPMUConfig> RawPMUConfigs;
     ErrorCode program(const RawPMUConfigs& curPMUConfigs, const bool silent = false, const int pid = -1);
+
+    TopologyEntry::CoreType getCoreType(const unsigned coreID) const
+    {
+        assert(coreID < topology.size());
+        return topology[coreID].core_type;
+    }
 
     std::pair<unsigned, unsigned> getOCREventNr(const int event, const unsigned coreID) const
     {
@@ -1417,6 +1451,7 @@ public:
         AVOTON = 77,
         CHERRYTRAIL = 76,
         APOLLO_LAKE = 92,
+        GEMINI_LAKE = 122,
         DENVERTON = 95,
         SNOWRIDGE = 134,
         CLARKDALE = 37,
@@ -1851,6 +1886,11 @@ public:
     //! \param IIOStack id of the IIO stack to program (-1 for all, if parameter omitted)
     void programIRPCounters(uint64 rawEvents[4], int IIOStack = -1);
 
+    //! \brief Control QAT telemetry service
+    //! \param dev device index
+    //! \param operation control code 
+    void controlQATTelemetry(uint32 dev, uint32 operation);
+
     //! \brief Program IDX events
     //! \param events config of event to program
     //! \param filters_wq filters(work queue) of event to program 
@@ -1858,7 +1898,7 @@ public:
     //! \param filters_tc filters(traffic class) of event to program 
     //! \param filters_pgsz filters(page size) of event to program 
     //! \param filters_xfersz filters(transfer size) of event to program 
-    void programIDXAccelCounters(uint32 accel, std::vector<uint64_t> &events, std::vector<uint32_t> &filters_wq, std::vector<uint32_t> &filters_eng, std::vector<uint32_t> &filters_tc, std::vector<uint32_t> &filters_pgsz, std::vector<uint32_t> &filters_xfersz);
+    void programIDXAccelCounters(uint32 accel, std::vector<uint64_t> &events, std::vector<uint32> &filters_wq, std::vector<uint32> &filters_eng, std::vector<uint32> &filters_tc, std::vector<uint32> &filters_pgsz, std::vector<uint32> &filters_xfersz);
 
 
     //! \brief Get the state of IIO counter
@@ -1921,6 +1961,7 @@ public:
             || cpu_model_ == AVOTON
             || cpu_model_ == CHERRYTRAIL
             || cpu_model_ == APOLLO_LAKE
+            || cpu_model_ == GEMINI_LAKE
             || cpu_model_ == DENVERTON
             // || cpu_model_ == SNOWRIDGE do not use Atom code for SNOWRIDGE
             ;
@@ -1930,6 +1971,22 @@ public:
     bool isAtom() const
     {
         return isAtom(cpu_model);
+    }
+
+    // From commit message: https://github.com/torvalds/linux/commit/e979121b1b1556e184492e6fc149bbe188fc83e6
+    bool memoryEventErrata() const
+    {
+        switch (cpu_model)
+        {
+            case SANDY_BRIDGE:
+            case JAKETOWN:
+            case IVYTOWN:
+            case IVY_BRIDGE:
+            case HASWELL:
+            case HASWELLX:
+                return true;
+        }
+        return false;
     }
 
     bool packageEnergyMetricsAvailable() const
@@ -1944,6 +2001,7 @@ public:
                  || cpu_model == PCM::CHERRYTRAIL
                  || cpu_model == PCM::BAYTRAIL
                  || cpu_model == PCM::APOLLO_LAKE
+                 || cpu_model == PCM::GEMINI_LAKE
                  || cpu_model == PCM::DENVERTON
                  || cpu_model == PCM::SNOWRIDGE
                  || cpu_model == PCM::HASWELLX
@@ -2128,6 +2186,7 @@ public:
             || ((SKX == cpu_model) && (num_sockets == 1))
 #endif
             || ICX == cpu_model
+            || SPR == cpu_model
             || SNOWRIDGE == cpu_model
                );
     }
@@ -2396,7 +2455,9 @@ protected:
              SKLL3HitPos = 1,
                L2HitMPos = 2,
             SKLL2MissPos = 2,
-                L2HitPos = 3
+            HSXL2MissPos = 2,
+                L2HitPos = 3,
+             HSXL2RefPos = 3
     };
     uint64 InvariantTSC; // invariant time stamp counter
     uint64 CStateResidency[PCM::MAX_C_STATE + 1];
@@ -3440,10 +3501,19 @@ double getActiveRelativeFrequency(const CounterStateType & before, const Counter
 template <class CounterStateType>
 double getL2CacheHitRatio(const CounterStateType& before, const CounterStateType& after) // 0.0 - 1.0
 {
-    if (!PCM::getInstance()->isL2CacheHitRatioAvailable()) return 0;
+    auto* pcm = PCM::getInstance();
+    if (!pcm->isL2CacheHitRatioAvailable()) return 0;
     const auto hits = getL2CacheHits(before, after);
+    if (pcm->memoryEventErrata())
+    {
+        const auto all = after.Event[BasicCounterState::HSXL2RefPos] - before.Event[BasicCounterState::HSXL2RefPos];
+        if (all == 0ULL) return 0.;
+        return double(hits) / double(all);
+    }
     const auto misses = getL2CacheMisses(before, after);
-    return double(hits) / double(hits + misses);
+    const auto all = double(hits + misses);
+    if (all == 0.0) return 0.;
+    return double(hits) / all;
 }
 
 /*! \brief Computes L3 cache hit ratio
@@ -3459,7 +3529,9 @@ double getL3CacheHitRatio(const CounterStateType& before, const CounterStateType
     if (!PCM::getInstance()->isL3CacheHitRatioAvailable()) return 0;
     const auto hits = getL3CacheHits(before, after);
     const auto misses = getL3CacheMisses(before, after);
-    return double(hits) / double(hits + misses);
+    const auto all = double(hits + misses);
+    if (all == 0.0) return 0.;
+    return double(hits) / all;
 }
 
 /*! \brief Computes number of L3 cache misses
@@ -3492,9 +3564,13 @@ uint64 getL2CacheMisses(const CounterStateType & before, const CounterStateType 
     if (pcm->useSkylakeEvents() || cpu_model == PCM::SNOWRIDGE || cpu_model == PCM::ADL || cpu_model == PCM::RPL) {
         return after.Event[BasicCounterState::SKLL2MissPos] - before.Event[BasicCounterState::SKLL2MissPos];
     }
-    if (pcm->isAtom() || cpu_model == PCM::KNL)
+    else if (pcm->isAtom() || cpu_model == PCM::KNL)
     {
         return after.Event[BasicCounterState::ArchLLCMissPos] - before.Event[BasicCounterState::ArchLLCMissPos];
+    }
+    else if (pcm->memoryEventErrata())
+    {
+        return after.Event[BasicCounterState::ArchLLCRefPos] - before.Event[BasicCounterState::ArchLLCRefPos];
     }
     uint64 L3Miss = after.Event[BasicCounterState::L3MissPos] - before.Event[BasicCounterState::L3MissPos];
     uint64 L3UnsharedHit = after.Event[BasicCounterState::L3UnsharedHitPos] - before.Event[BasicCounterState::L3UnsharedHitPos];
@@ -3519,6 +3595,13 @@ uint64 getL2CacheHits(const CounterStateType & before, const CounterStateType & 
         uint64 L2Miss = after.Event[BasicCounterState::ArchLLCMissPos] - before.Event[BasicCounterState::ArchLLCMissPos];
         uint64 L2Ref = after.Event[BasicCounterState::ArchLLCRefPos] - before.Event[BasicCounterState::ArchLLCRefPos];
         return L2Ref - L2Miss;
+    }
+    else if (pcm->memoryEventErrata())
+    {
+        const auto all = after.Event[BasicCounterState::HSXL2RefPos] - before.Event[BasicCounterState::HSXL2RefPos];
+        const auto misses = after.Event[BasicCounterState::HSXL2MissPos] - before.Event[BasicCounterState::HSXL2MissPos];
+        const auto hits = (all > misses) ? (all - misses) : 0ULL;
+        return hits;
     }
     return after.Event[BasicCounterState::L2HitPos] - before.Event[BasicCounterState::L2HitPos];
 }
@@ -3608,7 +3691,15 @@ uint64 getL3CacheHitsSnoop(const CounterStateType & before, const CounterStateTy
 template <class CounterStateType>
 uint64 getL3CacheHits(const CounterStateType & before, const CounterStateType & after)
 {
-    if (!PCM::getInstance()->isL3CacheHitsAvailable()) return 0;
+    auto * pcm = PCM::getInstance();
+    assert(pcm);
+    if (!pcm->isL3CacheHitsAvailable()) return 0;
+    else if (pcm->memoryEventErrata())
+    {
+        uint64 LLCMiss = after.Event[BasicCounterState::ArchLLCMissPos] - before.Event[BasicCounterState::ArchLLCMissPos];
+        uint64 LLCRef = after.Event[BasicCounterState::ArchLLCRefPos] - before.Event[BasicCounterState::ArchLLCRefPos];
+        return (LLCRef > LLCMiss) ? (LLCRef - LLCMiss) : 0ULL;
+    }
     return getL3CacheHitsSnoop(before, after) + getL3CacheHitsNoSnoop(before, after);
 }
 
@@ -4091,6 +4182,7 @@ inline double getQPItoMCTrafficRatio(const SystemCounterState & before, const Sy
     {
         memTraffic += getBytesReadFromPMM(before, after) + getBytesWrittenToPMM(before, after);
     }
+    if (memTraffic == 0) return -1.;
     return double(totalQPI) / double(memTraffic);
 }
 

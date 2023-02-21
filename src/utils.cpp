@@ -16,6 +16,9 @@
 #include "utils.h"
 #include "cpucounters.h"
 #include <numeric>
+#ifndef _MSC_VER
+#include <execinfo.h>
+#endif
 
 namespace pcm {
 
@@ -190,6 +193,38 @@ void sigINT_handler(int signum)
 }
 
 /**
+ * \brief handles SIGSEGV signals that lead to termination of the program
+ * this function specifically works when the client application launched
+ * by pcm -- terminates
+ */
+constexpr auto BACKTRACE_MAX_STACK_FRAME = 30;
+void sigSEGV_handler(int signum)
+{
+    void *backtrace_buffer[BACKTRACE_MAX_STACK_FRAME] = {0};
+    char **backtrace_strings = NULL;
+    size_t backtrace_size = 0;
+
+    backtrace_size = backtrace(backtrace_buffer, BACKTRACE_MAX_STACK_FRAME);
+    backtrace_strings = backtrace_symbols(backtrace_buffer, backtrace_size);
+    if (backtrace_strings == NULL)
+    {
+        std::cerr << "Debug: backtrace empty. \n";
+    }
+    else
+    {
+        std::cerr << "Debug: backtrace dump(" << backtrace_size << " stack frames).\n";
+        for (size_t i = 0; i < backtrace_size; i++)
+        {
+            std::cerr << backtrace_strings[i] << "\n";
+        }
+        free(backtrace_strings);
+        backtrace_strings = NULL;
+    }
+
+    sigINT_handler(signum);
+}
+
+/**
  * \brief handles signals that lead to restart the application
  * such as SIGHUP.
  * for example to re-read environment variables controlling PCM execution
@@ -309,10 +344,14 @@ void set_signal_handlers(void)
     sigaction(SIGQUIT, &saINT, NULL);
     sigaction(SIGABRT, &saINT, NULL);
     sigaction(SIGTERM, &saINT, NULL);
-    sigaction(SIGSEGV, &saINT, NULL);
-
+    
     saINT.sa_flags = SA_RESTART | SA_NOCLDSTOP;
     sigaction(SIGCHLD, &saINT, NULL); // get there is our child exits. do nothing if it stopped/continued
+
+    saINT.sa_handler = sigSEGV_handler;
+    sigemptyset(&saINT.sa_mask);
+    saINT.sa_flags = SA_RESTART;
+    sigaction(SIGSEGV, &saINT, NULL);
 
     // install SIGHUP handler to restart
     saHUP.sa_handler = sigHUP_handler;
@@ -353,6 +392,8 @@ void restore_signal_handlers(void)
 #ifndef _MSC_VER
     struct sigaction action;
     action.sa_handler = SIG_DFL;
+    action.sa_flags = 0;
+    sigemptyset(&action.sa_mask);
 
     sigaction(SIGINT, &action, NULL);
     sigaction(SIGQUIT, &action, NULL);
@@ -563,6 +604,11 @@ bool CheckAndForceRTMAbortMode(const char * arg, PCM * m)
 {
     if (check_argument_equals(arg, {"-force-rtm-abort-mode"}))
     {
+        if (nullptr == m)
+        {
+            m = PCM::getInstance();
+            assert(m);
+        }
         m->enableForceRTMAbortMode();
         return true;
     }
@@ -626,7 +672,7 @@ int calibratedSleep(const double delay, const char* sysCmd, const MainLoop& main
     return delay_ms;
 };
 
-void print_help_force_rtm_abort_mode(const int alignment)
+void print_help_force_rtm_abort_mode(const int alignment, const char * separator)
 {
     const auto m = PCM::getInstance();
     if (m->isForceRTMAbortModeAvailable() && (m->getMaxCustomCoreEvents() < 4))
@@ -636,7 +682,8 @@ void print_help_force_rtm_abort_mode(const int alignment)
         {
             std::cout << " ";
         }
-        std::cout << "=> force RTM transaction abort mode to enable more programmable counters\n";
+        assert(separator);
+        std::cout << separator << " force RTM transaction abort mode to enable more programmable counters\n";
     }
 }
 
@@ -1031,5 +1078,146 @@ int load_events(const std::string &fn, std::map<std::string, uint32_t> &ofm,
     std::map<std::string,std::pair<uint32_t,std::map<std::string,uint32_t>>> nm;
     return load_events(fn, ofm, pfn_evtcb, evtcb_ctx, nm);
 }
+
+bool get_cpu_bus(uint32 msmDomain, uint32 msmBus, uint32 msmDev, uint32 msmFunc, uint32 &cpuBusValid, std::vector<uint32> &cpuBusNo, int &cpuPackageId)
+{
+    int cpuBusNo0 = 0x0;
+    uint32 sadControlCfg = 0x0;
+    uint32 busNo = 0x0;
+
+    //std::cout << "get_cpu_bus: d=" << std::hex << msmDomain << ",b=" << msmBus << ",d=" << msmDev << ",f=" << msmFunc <<" \n";
+    PciHandleType h(msmDomain, msmBus, msmDev, msmFunc);
+
+    h.read32(SPR_MSM_REG_CPUBUSNO_VALID_OFFSET, &cpuBusValid);
+    if (cpuBusValid == (std::numeric_limits<uint32>::max)()) {
+        std::cerr << "Failed to read CPUBUSNO_VALID" << std::endl;
+        return false;
+    }
+
+    for (int i = 0; i < 8; ++i)
+    {
+        busNo = 0x00;
+        if (i <= 3)
+        {
+            h.read32(SPR_MSM_REG_CPUBUSNO0_OFFSET + i*4, &busNo);
+        }
+        else
+        {
+            h.read32(SPR_MSM_REG_CPUBUSNO4_OFFSET + (i-4)*4, &busNo);
+        }
+        if (busNo == (std::numeric_limits<uint32>::max)())
+        {
+            std::cerr << "Failed to read CPUBUSNO" << std::endl;
+            return false;
+        }
+        cpuBusNo.push_back(busNo);
+        //std::cout << std::hex << "get_cpu_bus: busNo=0x" << busNo << "\n";
+    }
+
+    cpuBusNo0 = cpuBusNo[0] & 0xff;
+    PciHandleType sad_cfg_handler(msmDomain, cpuBusNo0, 0, 0);
+
+    sad_cfg_handler.read32(SPR_SAD_REG_CTL_CFG_OFFSET, &sadControlCfg);
+    if (sadControlCfg == (std::numeric_limits<uint32>::max)())
+    {
+        std::cerr << "Failed to read SAD_CONTROL_CFG" << std::endl;
+        return false;
+    }
+    cpuPackageId = sadControlCfg & 0xf;
+
+    return true;
+}
+
+#ifdef __linux__
+FILE * tryOpen(const char * path, const char * mode)
+{
+    FILE * f = fopen(path, mode);
+    if (!f)
+    {
+        f = fopen((std::string("/pcm") + path).c_str(), mode);
+    }
+    return f;
+}
+
+std::string readSysFS(const char * path, bool silent)
+{
+    FILE * f = tryOpen(path, "r");
+    if (!f)
+    {
+        if (silent == false) std::cerr << "ERROR: Can not open " << path << " file.\n";
+        return std::string();
+    }
+    char buffer[1024];
+    if(NULL == fgets(buffer, 1024, f))
+    {
+        if (silent == false) std::cerr << "ERROR: Can not read from " << path << ".\n";
+        fclose(f);
+        return std::string();
+    }
+    fclose(f);
+    
+    return std::string(buffer);
+}
+
+bool writeSysFS(const char * path, const std::string & value, bool silent)
+{
+    FILE * f = tryOpen(path, "w");
+    if (!f)
+    {
+        if (silent == false) std::cerr << "ERROR: Can not open " << path << " file.\n";
+        return false;
+    }
+    if (fputs(value.c_str(), f) < 0)
+    {
+        if (silent == false) std::cerr << "ERROR: Can not write to " << path << ".\n";
+        fclose(f);
+        return false;
+    }
+    fclose(f);
+    return true;
+}
+
+int readMaxFromSysFS(const char * path)
+{
+    std::string content = readSysFS(path);
+    const char * buffer = content.c_str();
+    int result = -1;
+    pcm_sscanf(buffer) >> s_expect("0-") >> result;
+    if(result == -1)
+    {
+       pcm_sscanf(buffer) >> result;
+    }
+    return result;
+}
+
+bool readMapFromSysFS(const char * path, std::unordered_map<std::string, uint32> &result, bool silent)
+{
+    FILE * f = tryOpen(path, "r");
+    if (!f)
+    {
+        if (silent == false) std::cerr << "ERROR: Can not open " << path << " file.\n";
+        return false;
+    }
+    char buffer[1024];
+    while(fgets(buffer, 1024, f) != NULL)
+    {
+        std::string key, value, item;
+        uint32 numValue = 0;
+
+        item = std::string(buffer);
+        key = item.substr(0,item.find(" "));
+        value = item.substr(item.find(" ")+1);
+        if (key.empty() || value.empty())
+            continue; //skip the item if the token invalid
+        std::istringstream iss2(value);
+        iss2 >> std::setbase(0) >> numValue;
+        result.insert(std::pair<std::string, uint32>(key, numValue));
+        //std::cerr << "readMapFromSysFS:" << key << "=" << numValue << ".\n";
+    }
+
+    fclose(f);
+    return true;
+}
+#endif
 
 } // namespace pcm

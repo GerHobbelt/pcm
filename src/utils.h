@@ -27,6 +27,26 @@
 #include <intrin.h>
 #endif
 #include <map>
+#include <unordered_map>
+
+#define PCM_MAIN_NOTHROW \
+int mainThrows(int argc, char * argv[]); \
+int main(int argc, char * argv[]) \
+{ \
+    try { \
+        return mainThrows(argc, argv); \
+    } catch(const std::runtime_error & e) \
+    { \
+        std::cerr << "PCM ERROR. Exception " << e.what() << "\n"; \
+    } catch(const std::exception & e) \
+    { \
+        std::cerr << "PCM ERROR. Exception " << e.what() << "\n"; \
+    } catch (...) \
+    { \
+        std::cerr << "PCM ERROR. Exception detected (no further details available).\n"; \
+    } \
+    return -1; \
+}
 
 namespace pcm {
 
@@ -318,7 +338,7 @@ std::vector<std::string> split(const std::string & str, const char delim);
 class PCM;
 bool CheckAndForceRTMAbortMode(const char * argv, PCM * m);
 
-void print_help_force_rtm_abort_mode(const int alignment);
+void print_help_force_rtm_abort_mode(const int alignment, const char * separator = "=>");
 
 template <class F>
 void parseParam(int argc, char* argv[], const char* param, F f)
@@ -570,4 +590,16 @@ int load_events(const std::string &fn, std::map<std::string, uint32_t> &ofm,
 int load_events(const std::string &fn, std::map<std::string, uint32_t> &ofm,
                 int (*pfn_evtcb)(evt_cb_type, void *, counter &, std::map<std::string, uint32_t> &, std::string, uint64),
                 void *evtcb_ctx);
+
+bool get_cpu_bus(uint32 msmDomain, uint32 msmBus, uint32 msmDev, uint32 msmFunc, uint32 &cpuBusValid, std::vector<uint32> &cpuBusNo, int &cpuPackageId);
+
+#ifdef __linux__
+FILE * tryOpen(const char * path, const char * mode);
+std::string readSysFS(const char * path, bool silent = false);
+bool writeSysFS(const char * path, const std::string & value, bool silent = false);
+int readMaxFromSysFS(const char * path);
+bool readMapFromSysFS(const char * path, std::unordered_map<std::string, uint32> &result, bool silent = false);
+#endif
+
+
 } // namespace pcm

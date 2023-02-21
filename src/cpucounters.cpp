@@ -64,6 +64,7 @@
 #include <string.h>
 #include <limits>
 #include <map>
+#include <unordered_map>
 #include <algorithm>
 #include <thread>
 #include <future>
@@ -798,6 +799,7 @@ void PCM::initCStateSupportTables()
         case BAYTRAIL:
         case CHERRYTRAIL:
         case APOLLO_LAKE:
+        case GEMINI_LAKE:
         case DENVERTON:
         case ADL:
         case RPL:
@@ -867,6 +869,7 @@ void PCM::initCStateSupportTables()
         case AVOTON:
         case CHERRYTRAIL:
         case APOLLO_LAKE:
+        case GEMINI_LAKE:
         case DENVERTON:
         PCM_SKL_PATH_CASES
         case ADL:
@@ -887,66 +890,6 @@ void PCM::initCStateSupportTables()
 
 
 #ifdef __linux__
-FILE * tryOpen(const char * path, const char * mode)
-{
-    FILE * f = fopen(path, mode);
-    if (!f)
-    {
-        f = fopen((std::string("/pcm") + path).c_str(), mode);
-    }
-    return f;
-}
-
-std::string readSysFS(const char * path, bool silent = false)
-{
-    FILE * f = tryOpen(path, "r");
-    if (!f)
-    {
-        if (silent == false) std::cerr << "ERROR: Can not open " << path << " file.\n";
-        return std::string();
-    }
-    char buffer[1024];
-    if(NULL == fgets(buffer, 1024, f))
-    {
-        if (silent == false) std::cerr << "ERROR: Can not read from " << path << ".\n";
-        fclose(f);
-        return std::string();
-    }
-    fclose(f);
-    return std::string(buffer);
-}
-
-bool writeSysFS(const char * path, const std::string & value, bool silent = false)
-{
-    FILE * f = tryOpen(path, "w");
-    if (!f)
-    {
-        if (silent == false) std::cerr << "ERROR: Can not open " << path << " file.\n";
-        return false;
-    }
-    if (fputs(value.c_str(), f) < 0)
-    {
-        if (silent == false) std::cerr << "ERROR: Can not write to " << path << ".\n";
-        fclose(f);
-        return false;
-    }
-    fclose(f);
-    return true;
-}
-
-int readMaxFromSysFS(const char * path)
-{
-    std::string content = readSysFS(path);
-    const char * buffer = content.c_str();
-    int result = -1;
-    pcm_sscanf(buffer) >> s_expect("0-") >> result;
-    if(result == -1)
-    {
-       pcm_sscanf(buffer) >> result;
-    }
-    return result;
-}
-
 constexpr auto perfSlotsPath = "/sys/bus/event_source/devices/cpu/events/slots";
 constexpr auto perfBadSpecPath = "/sys/bus/event_source/devices/cpu/events/topdown-bad-spec";
 constexpr auto perfBackEndPath = "/sys/bus/event_source/devices/cpu/events/topdown-be-bound";
@@ -967,8 +910,194 @@ bool perfSupportsTopDown()
     }
     return 1 == yes;
 }
-
 #endif
+
+const std::vector<std::string> qat_evtsel_mapping = 
+{
+    { "sample_cnt" },               //0x0
+    { "pci_trans_cnt" },            //0x1
+    { "max_rd_lat" },               //0x2
+    { "rd_lat_acc_avg" },           //0x3
+    { "max_lat" },                  //0x4
+    { "lat_acc_avg" },              //0x5
+    { "bw_in" },                    //0x6
+    { "bw_out" },                   //0x7
+    { "at_page_req_lat_acc_avg" },  //0x8
+    { "at_trans_lat_acc_avg" },     //0x9
+    { "at_max_tlb_used" },          //0xA
+    { "util_cpr0" },                //0xB
+    { "util_dcpr0" },               //0xC
+    { "util_dcpr1" },               //0xD
+    { "util_dcpr2" },               //0xE
+    { "util_xlt0" },                //0xF
+    { "util_xlt1" },                //0x10
+    { "util_cph0" },                //0x11
+    { "util_cph1" },                //0x12
+    { "util_cph2" },                //0x13
+    { "util_cph3" },                //0x14
+    { "util_cph4" },                //0x15
+    { "util_cph5" },                //0x16
+    { "util_cph6" },                //0x17
+    { "util_cph7" },                //0x18
+    { "util_ath0" },                //0x19
+    { "util_ath1" },                //0x1A
+    { "util_ath2" },                //0x1B
+    { "util_ath3" },                //0x1C
+    { "util_ath4" },                //0x1D
+    { "util_ath5" },                //0x1E
+    { "util_ath6" },                //0x1F
+    { "util_ath7" },                //0x20
+    { "util_ucs0" },                //0x21
+    { "util_ucs1" },                //0x22
+    { "util_ucs2" },                //0x23
+    { "util_ucs3" },                //0x24
+    { "util_pke0" },                //0x25
+    { "util_pke1" },                //0x26
+    { "util_pke2" },                //0x27
+    { "util_pke3" },                //0x28
+    { "util_pke4" },                //0x29
+    { "util_pke5" },                //0x2A
+    { "util_pke6" },                //0x2B
+    { "util_pke7" },                //0x2C
+    { "util_pke8" },                //0x2D
+    { "util_pke9" },                //0x2E
+    { "util_pke10" },               //0x2F
+    { "util_pke11" },               //0x30
+    { "util_pke12" },               //0x31
+    { "util_pke13" },               //0x32
+    { "util_pke14" },               //0x33
+    { "util_pke15" },               //0x34
+    { "util_pke16" },               //0x35
+    { "util_pke17" },               //0x36
+    { "unknown" }                   //0x37
+};
+
+class VirtualDummyRegister : public HWRegister
+{
+    uint64 lastValue;
+public:
+    VirtualDummyRegister() : lastValue(0) {}
+    void operator = (uint64 val) override
+    {
+        lastValue = val;
+    }
+    operator uint64 () override
+    {
+        return lastValue;
+    }
+};
+
+class QATTelemetryVirtualGeneralConfigRegister : public HWRegister
+{
+    friend class QATTelemetryVirtualCounterRegister;
+    int domain, b, d, f;
+    uint64 operation;
+    std::unordered_map<std::string, uint32> data_cache; //data cache
+public:
+    QATTelemetryVirtualGeneralConfigRegister(int domain_, int b_, int d_, int f_) :
+        domain(domain_),
+        b(b_),
+        d(d_),
+        f(f_),
+        operation(0x0)
+    {
+    }
+    void operator = (uint64 val) override
+    {
+        operation = val;
+#ifdef __linux__
+        std::ostringstream sysfs_path(std::ostringstream::out);
+
+        switch (operation)
+        {
+            case PCM::QAT_TLM_STOP: //disable
+            case PCM::QAT_TLM_START: //enable
+                sysfs_path << std::string("/sys/bus/pci/devices/") <<
+                    std::hex << std::setw(4) << std::setfill('0') << domain << ":" <<
+                    std::hex << std::setw(2) << std::setfill('0') << b << ":" <<
+                    std::hex << std::setw(2) << std::setfill('0') << d << "." <<
+                    std::hex << f << "/telemetry/control";
+
+                if (writeSysFS(sysfs_path.str().c_str(), (operation == PCM::QAT_TLM_START  ? "1" : "0")) == false)
+                {
+                    std::cerr << "Linux sysfs: Error on control QAT telemetry operation = " << operation << ".\n";
+                }
+                break;
+            case PCM::QAT_TLM_REFRESH: //refresh data
+                sysfs_path << std::string("/sys/bus/pci/devices/") <<
+                    std::hex << std::setw(4) << std::setfill('0') << domain << ":" <<
+                    std::hex << std::setw(2) << std::setfill('0') << b << ":" <<
+                    std::hex << std::setw(2) << std::setfill('0') << d << "." <<
+                    std::hex << f << "/telemetry/device_data";
+
+                data_cache.clear();
+                readMapFromSysFS(sysfs_path.str().c_str(), data_cache);
+                break;
+            default:
+                break;
+        }
+#endif
+    }
+    operator uint64 () override
+    {
+        return operation;
+    }
+    ~QATTelemetryVirtualGeneralConfigRegister()
+    {
+        //std::cerr << "~QATTelemetryVirtualGeneralConfigRegister.\n" << std::flush;
+    }
+};
+
+class QATTelemetryVirtualControlRegister : public HWRegister
+{
+    friend class QATTelemetryVirtualCounterRegister;
+    uint64 event;
+public:
+    QATTelemetryVirtualControlRegister() : event(0x0)
+    {
+    }
+    void operator = (uint64 val) override
+    {
+        event = extract_bits(val, 32, 59);
+    }
+    operator uint64 () override
+    {
+        return event;
+    }
+};
+
+class QATTelemetryVirtualCounterRegister : public HWRegister
+{
+    std::shared_ptr<QATTelemetryVirtualGeneralConfigRegister> gConfigReg;
+    std::shared_ptr<QATTelemetryVirtualControlRegister> controlReg;
+    int ctr_id;
+public:
+    QATTelemetryVirtualCounterRegister( std::shared_ptr<QATTelemetryVirtualGeneralConfigRegister> gConfigReg_, std::shared_ptr<QATTelemetryVirtualControlRegister> controlReg_, int ctr_id_) : 
+        gConfigReg(gConfigReg_),
+        controlReg(controlReg_),
+        ctr_id(ctr_id_)
+    {
+    }
+    void operator = (uint64 /* val */) override
+    {
+        // no-op
+    }
+    operator uint64 () override
+    {
+        uint64 result = 0;
+        uint32 eventsel = controlReg->event;
+        if (eventsel < qat_evtsel_mapping.size())
+        {
+            std::string key = qat_evtsel_mapping[eventsel];
+            if (gConfigReg->data_cache.find(key) != gConfigReg->data_cache.end())
+            {
+                result = gConfigReg->data_cache.at(key);
+            }
+        }
+        //std::cerr << std::hex << "QAT-CTR(0x" << ctr_id << "), key="<< key << ", val=0x" << std::hex << result << ".\n";
+        return result;
+    }
+};
 
 bool PCM::discoverSystemTopology()
 {
@@ -1506,6 +1635,7 @@ bool PCM::detectNominalFrequency()
                || cpu_model == BROADWELL
                || cpu_model == AVOTON
                || cpu_model == APOLLO_LAKE
+               || cpu_model == GEMINI_LAKE
                || cpu_model == DENVERTON
                || useSKLPath()
                || cpu_model == SNOWRIDGE
@@ -1601,56 +1731,70 @@ void initSocket2Ubox0Bus()
         UBOX0_DEV_IDS, (uint32)sizeof(UBOX0_DEV_IDS) / sizeof(UBOX0_DEV_IDS[0]));
 }
 
-static const uint32 IAA_DEV_IDS[] = {
-    0x0CFE
-};
-
-static const uint32 DSA_DEV_IDS[] = {
-    0x0B25
-};
-
-static const uint32 HCx_DEV_IDS[] = {
-    0x4940
-};
-
-
-std::vector<std::pair<uint32, uint32> > socket2IAAbus;
-std::vector<std::pair<uint32, uint32> > socket2DSAbus;
-std::vector<std::pair<uint32, uint32> > socket2HCxbus;
-
-
-void initSocket2IDXAccelBus()
+bool initRootBusMap(std::map<int, int> &rootbus_map)
 {
-    initSocket2Bus(socket2IAAbus, SPR_IDX_IAA_REGISTER_DEV_ADDR, SPR_IDX_IAA_REGISTER_FUNC_ADDR, IAA_DEV_IDS, (uint32)sizeof(IAA_DEV_IDS) / sizeof(IAA_DEV_IDS[0]));
-    initSocket2Bus(socket2DSAbus, SPR_IDX_DSA_REGISTER_DEV_ADDR, SPR_IDX_DSA_REGISTER_FUNC_ADDR, DSA_DEV_IDS, (uint32)sizeof(DSA_DEV_IDS) / sizeof(DSA_DEV_IDS[0]));
-    initSocket2Bus(socket2HCxbus, SPR_IDX_HCx_REGISTER_DEV_ADDR, SPR_IDX_HCx_REGISTER_FUNC_ADDR, HCx_DEV_IDS, (uint32)sizeof(HCx_DEV_IDS) / sizeof(HCx_DEV_IDS[0]));
-#ifndef PCM_SILENT
-    std::cerr << "Info: IDX - " << socket2IAAbus.size() << " IAA device detected, ";
-    std::cerr << socket2DSAbus.size() << " DSA device detected. \n";
-#endif
+    bool mapped = false;
+    static const uint32 MSM_DEV_IDS[] = { SPR_MSM_DEV_ID };
+
+    std::vector<std::pair<uint32, uint32> > socket2MSMbus;
+    initSocket2Bus(socket2MSMbus, SPR_MSM_DEV_ADDR, SPR_MSM_FUNC_ADDR, MSM_DEV_IDS, (uint32)sizeof(MSM_DEV_IDS) / sizeof(MSM_DEV_IDS[0]));
+
+    for (auto & s2bus : socket2MSMbus)
+    {
+        uint32 cpuBusValid = 0x0;
+        int cpuBusPackageId;
+        std::vector<uint32> cpuBusNo;
+
+        if (get_cpu_bus(s2bus.first, s2bus.second, SPR_MSM_DEV_ADDR, SPR_MSM_FUNC_ADDR, cpuBusValid, cpuBusNo, cpuBusPackageId) == false)
+            return false;
+
+        for (int cpuBusId = 0; cpuBusId < SPR_MSM_CPUBUSNO_MAX; ++cpuBusId)
+        {
+            if (!((cpuBusValid >> cpuBusId) & 0x1))
+            {
+                //std::cout << "CPU bus " << cpuBusId << " is disabled on package " << cpuBusPackageId << std::endl;
+                continue;
+            }
+
+            int rootBus = (cpuBusNo[(int)(cpuBusId / 4)] >> ((cpuBusId % 4) * 8)) & 0xff;
+            rootbus_map[((s2bus.first << 8) | rootBus)] = cpuBusPackageId;
+            //std::cout << "Mapped CPU bus #" << std::dec << cpuBusId << std::hex << " (domain=0x" << s2bus.first << " bus=0x" << rootBus << ") to " << std::dec << "package" << cpuBusPackageId << std::endl;
+        }
+
+        mapped = true;
+    }
+
+    return mapped;
 }
 
+#define SPR_IDX_ACCEL_COUNTER_MAX_NUM (8)
+#define SPR_QAT_ACCEL_COUNTER_MAX_NUM (16)
 
-std::vector<uint64> getIDXAccelBar0(std::vector<std::pair<uint32, uint32> > & socket2bus, uint32 dev, uint32 func)
+struct idx_accel_dev_info {
+    uint64 mem_bar;
+    uint32 numa_node;
+    uint32 socket_id;
+    uint32 domain;
+    uint32 bus;
+    uint32 dev;
+    uint32 func;
+};
+
+bool getIDXDevBAR(std::vector<std::pair<uint32, uint32> > & socket2bus, uint32 dev, uint32 func, std::map<int, int> &bus2socket, std::vector<struct idx_accel_dev_info> &idx_devs)
 {
-    std::vector<uint64> result;
     uint64 memBar = 0x0;
     uint32 pciCmd = 0x0;
-    
-    for (auto & s2bus : socket2bus)    
+    uint32 numaNode = 0xff;
+    struct idx_accel_dev_info idx_dev;
+
+    for (auto & s2bus : socket2bus)
     {
+        memBar = 0x0;
+        pciCmd = 0x0;
+
         PciHandleType IDXHandle(s2bus.first, s2bus.second, dev, func);
         IDXHandle.read64(SPR_IDX_ACCEL_BAR0_OFFSET, &memBar);
         IDXHandle.read32(SPR_IDX_ACCEL_PCICMD_OFFSET, &pciCmd);
-#if 0 //Debug purpose
-        uint32 value;
-        IDXHandle.read32(0, &value);
-        const uint32 vendor_id = value & 0xffff;
-        const uint32 device_id = (value >> 16) & 0xffff;
-        std::cout << "vendor_id=0x" << std::hex << vendor_id << ",device_id=0x" << std::hex << device_id << std::dec << std::endl;        
-        std::cout << "BAR0 of IDX accel(s:0x" << std::hex << s2bus.first << ",B:0x" << std::hex << s2bus.second << ",D:0x" << std::hex << dev << ",F:0x" << std::hex << func \
-            << ") = 0x" << std::hex << memBar << std::endl;
-#endif
         if (memBar == 0x0 || (pciCmd & 0x02) == 0x0) //Check BAR0 is valid or NOT.
         {
             std::cout << "Warning: IDX - BAR0 of B:0x" << std::hex << s2bus.second << ",D:0x" << std::hex << dev << ",F:0x" << std::hex << func \
@@ -1658,13 +1802,42 @@ std::vector<uint64> getIDXAccelBar0(std::vector<std::pair<uint32, uint32> > & so
             continue;
         }
 
-        result.push_back(memBar);
+        numaNode = 0xff;
+#ifdef __linux__
+        std::ostringstream devNumaNodePath(std::ostringstream::out);
+        devNumaNodePath << std::string("/sys/bus/pci/devices/") <<
+            std::hex << std::setw(4) << std::setfill('0') << s2bus.first << ":" <<
+            std::hex << std::setw(2) << std::setfill('0') << s2bus.second << ":" <<
+            std::hex << std::setw(2) << std::setfill('0') << dev << "." <<
+            std::hex << func << "/numa_node";
+        const std::string devNumaNodeStr = readSysFS(devNumaNodePath.str().c_str(), true);
+        if (devNumaNodeStr.size())
+        {
+            numaNode = std::atoi(devNumaNodeStr.c_str());
+            if (numaNode == (std::numeric_limits<uint32>::max)())
+            {
+                numaNode = 0xff; //translate to special value for numa disable case. 
+            }
+        }
+        //std::cout << "IDX DEBUG: numa node file path=" << devNumaNodePath.str().c_str()  << ", value=" << numaNode << std::endl;
+#endif
+        idx_dev.mem_bar = memBar;
+        idx_dev.numa_node = numaNode;
+        idx_dev.socket_id = 0xff;
+        idx_dev.domain = s2bus.first;
+        idx_dev.bus = s2bus.second;
+        idx_dev.dev = dev;
+        idx_dev.func = func;
+        if (bus2socket.find(((s2bus.first << 8 ) | s2bus.second)) != bus2socket.end())
+        {
+            idx_dev.socket_id = bus2socket.at(((s2bus.first << 8 ) | s2bus.second));
+        }
+
+        idx_devs.push_back(idx_dev);
     }
 
-    return result;
+    return true;
 }
-
-#define SPR_IDX_ACCEL_COUNTER_MAX_NUM (8)
 
 void PCM::initUncoreObjects()
 {
@@ -1776,11 +1949,6 @@ void PCM::initUncoreObjects()
         {
             std::cerr << "PCM warning: found " << socket2UBOX0bus.size() << " uboxes. Expected " << num_sockets << std::endl;
         }
-    }
-
-    if (cpu_model == SPR)
-    {
-        initSocket2IDXAccelBus();       
     }
 
     if (useLinuxPerfForUncore())
@@ -2061,29 +2229,15 @@ void PCM::initUncorePMUsDirect()
 
 
     //init the IDX accelerator
-    auto createIDXPMU = [](const size_t addr, const size_t mapSize) -> IDX_PMU
+    auto createIDXPMU = [](const size_t addr, const size_t mapSize, const size_t numaNode, const size_t socketId) -> IDX_PMU
     {
         const auto alignedAddr = addr & ~4095ULL;
         auto handle = std::make_shared<MMIORange>(alignedAddr, mapSize, false);
         auto pmon_offset = (handle->read64(SPR_IDX_ACCEL_PMON_BASE_OFFSET) & SPR_IDX_ACCEL_PMON_BASE_MASK)*SPR_IDX_ACCEL_PMON_BASE_RATIO;
 
-#if 0
-        //Debug purpose code start.
-        uint32 dev_ver = 0, dev_status = 0;
-        uint64 perfmon_cap = 0;
-        dev_ver = handle->read32(0x0);
-        dev_status = handle->read32(0x90);
-        perfmon_cap = handle->read64(pmon_offset);
-        
-        std::cout << "bar0=0x" << std::hex << alignedAddr << ", pmon_offset=0x" << std::hex << pmon_offset << "\n";
-        std::cout << "hw_ver=0x" << std::hex << dev_ver << ", dev_status=0x" << std::hex << dev_status << ", perfmon_cap=0x" << std::hex << perfmon_cap<< "\n";
-        //Debug purpose end.
-#endif
-
         const auto n_regs = SPR_IDX_ACCEL_COUNTER_MAX_NUM;
         std::vector<std::shared_ptr<HWRegister> > CounterControlRegs, CounterValueRegs, CounterFilterWQRegs, CounterFilterENGRegs;
-        std::vector<std::shared_ptr<HWRegister> > CounterFilterTCRegs, CounterFilterPGSZRegs, CounterFilterXFERSZRegs;        
-
+        std::vector<std::shared_ptr<HWRegister> > CounterFilterTCRegs, CounterFilterPGSZRegs, CounterFilterXFERSZRegs;
 
         for (size_t r = 0; r < n_regs; ++r)
         {
@@ -2098,8 +2252,11 @@ void PCM::initUncorePMUsDirect()
 
         return IDX_PMU(
             false,
+            numaNode,
+            socketId,
             std::make_shared<MMIORegister32>(handle, SPR_IDX_PMON_RESET_CTL_OFFSET + pmon_offset),
             std::make_shared<MMIORegister32>(handle, SPR_IDX_PMON_FREEZE_CTL_OFFSET + pmon_offset),
+            std::make_shared<VirtualDummyRegister>(),
             CounterControlRegs,
             CounterValueRegs,
             CounterFilterWQRegs,
@@ -2107,33 +2264,95 @@ void PCM::initUncorePMUsDirect()
             CounterFilterTCRegs,
             CounterFilterPGSZRegs,
             CounterFilterXFERSZRegs
-        );    
+        );
+    };
 
-    };    
+    //init the QAT accelerator
+    auto createQATPMU = [](const size_t numaNode, const size_t socketId, const size_t domain, const size_t bus, const size_t dev, const size_t func) -> IDX_PMU
+    {
+        const auto n_regs = SPR_QAT_ACCEL_COUNTER_MAX_NUM;
+        auto GlobalConfigReg= std::make_shared<QATTelemetryVirtualGeneralConfigRegister>(domain, bus, dev, func);
+        std::vector<std::shared_ptr<HWRegister> > CounterControlRegs, CounterValueRegs, CounterFilterWQRegs, CounterFilterENGRegs;
+        std::vector<std::shared_ptr<HWRegister> > CounterFilterTCRegs, CounterFilterPGSZRegs, CounterFilterXFERSZRegs;
+        for (size_t r = 0; r < n_regs; ++r)
+        {
+            auto CounterControlReg= std::make_shared<QATTelemetryVirtualControlRegister>();
+            CounterControlRegs.push_back(CounterControlReg);
+            CounterValueRegs.push_back(std::make_shared<QATTelemetryVirtualCounterRegister>(GlobalConfigReg, CounterControlReg, r));
+            CounterFilterWQRegs.push_back(std::make_shared<VirtualDummyRegister>()); //dummy
+            CounterFilterENGRegs.push_back(std::make_shared<VirtualDummyRegister>()); //dummy
+            CounterFilterTCRegs.push_back(std::make_shared<VirtualDummyRegister>()); //dummy
+            CounterFilterPGSZRegs.push_back(std::make_shared<VirtualDummyRegister>()); //dummy
+            CounterFilterXFERSZRegs.push_back(std::make_shared<VirtualDummyRegister>()); //dummy
+        }
+
+        return IDX_PMU(
+            false,
+            numaNode,
+            socketId,
+            std::make_shared<VirtualDummyRegister>(),
+            std::make_shared<VirtualDummyRegister>(),
+            GlobalConfigReg,
+            CounterControlRegs,
+            CounterValueRegs,
+            CounterFilterWQRegs,
+            CounterFilterENGRegs,
+            CounterFilterTCRegs,
+            CounterFilterPGSZRegs,
+            CounterFilterXFERSZRegs
+        );
+    };
 
     if (cpu_model == PCM::SPR)
-    {   
-        idxPMUs.resize(IDX_MAX);
+    {
+        static const uint32 IAA_DEV_IDS[] = { 0x0CFE };
+        static const uint32 DSA_DEV_IDS[] = { 0x0B25 };
+        static const uint32 QAT_DEV_IDS[] = { 0x4940, 0x4942 };
+        std::vector<std::pair<uint32, uint32> > socket2IAAbus;
+        std::vector<std::pair<uint32, uint32> > socket2DSAbus;
+        std::vector<std::pair<uint32, uint32> > socket2QATbus;
+        std::map<int, int> rootbusMap;
 
-        //ENUM IAA devices
+        //Enumurate IDX devices by PCIe bus scan
+        initSocket2Bus(socket2IAAbus, SPR_IDX_IAA_REGISTER_DEV_ADDR, SPR_IDX_IAA_REGISTER_FUNC_ADDR, IAA_DEV_IDS, (uint32)sizeof(IAA_DEV_IDS) / sizeof(IAA_DEV_IDS[0]));
+        initSocket2Bus(socket2DSAbus, SPR_IDX_DSA_REGISTER_DEV_ADDR, SPR_IDX_DSA_REGISTER_FUNC_ADDR, DSA_DEV_IDS, (uint32)sizeof(DSA_DEV_IDS) / sizeof(DSA_DEV_IDS[0]));
+        initSocket2Bus(socket2QATbus, SPR_IDX_QAT_REGISTER_DEV_ADDR, SPR_IDX_QAT_REGISTER_FUNC_ADDR, QAT_DEV_IDS, (uint32)sizeof(QAT_DEV_IDS) / sizeof(QAT_DEV_IDS[0]));
+#ifndef PCM_SILENT
+        std::cerr << "Info: IDX - Detected " << socket2IAAbus.size() << " IAA devices, " << socket2DSAbus.size() << " DSA devices, " << socket2QATbus.size() << " QAT devices. \n";
+#endif
+        initRootBusMap(rootbusMap);
+
+        idxPMUs.resize(IDX_MAX);
         idxPMUs[IDX_IAA].clear();
         if (socket2IAAbus.size())
         {
-            auto memBars = getIDXAccelBar0(socket2IAAbus, SPR_IDX_IAA_REGISTER_DEV_ADDR, SPR_IDX_IAA_REGISTER_FUNC_ADDR);
-            for (auto & memBar : memBars)
+            std::vector<struct idx_accel_dev_info> devInfos;
+            getIDXDevBAR(socket2IAAbus, SPR_IDX_IAA_REGISTER_DEV_ADDR, SPR_IDX_IAA_REGISTER_FUNC_ADDR, rootbusMap, devInfos);
+            for (auto & devInfo : devInfos)
             {
-                idxPMUs[IDX_IAA].push_back(createIDXPMU(memBar, SPR_IDX_ACCEL_BAR0_SIZE));
+                idxPMUs[IDX_IAA].push_back(createIDXPMU(devInfo.mem_bar, SPR_IDX_ACCEL_BAR0_SIZE, devInfo.numa_node, devInfo.socket_id));
             }
         }
 
-        //ENUM DSA devices
         idxPMUs[IDX_DSA].clear();
         if (socket2DSAbus.size())
         {
-            auto memBars = getIDXAccelBar0(socket2DSAbus, SPR_IDX_DSA_REGISTER_DEV_ADDR, SPR_IDX_DSA_REGISTER_FUNC_ADDR);
-            for (auto & memBar : memBars)
+            std::vector<struct idx_accel_dev_info> devInfos;
+            getIDXDevBAR(socket2DSAbus, SPR_IDX_DSA_REGISTER_DEV_ADDR, SPR_IDX_DSA_REGISTER_FUNC_ADDR, rootbusMap, devInfos);
+            for (auto & devInfo : devInfos)
             {
-                idxPMUs[IDX_DSA].push_back(createIDXPMU(memBar, SPR_IDX_ACCEL_BAR0_SIZE));
+                idxPMUs[IDX_DSA].push_back(createIDXPMU(devInfo.mem_bar, SPR_IDX_ACCEL_BAR0_SIZE, devInfo.numa_node, devInfo.socket_id));
+            }
+        }
+
+        idxPMUs[IDX_QAT].clear();
+        if (socket2QATbus.size())
+        {
+            std::vector<struct idx_accel_dev_info> devInfos;
+            getIDXDevBAR(socket2QATbus, SPR_IDX_QAT_REGISTER_DEV_ADDR, SPR_IDX_QAT_REGISTER_FUNC_ADDR, rootbusMap, devInfos);
+            for (auto & devInfo : devInfos)
+            {
+                idxPMUs[IDX_QAT].push_back(createQATPMU(devInfo.numa_node, devInfo.socket_id, devInfo.domain , devInfo.bus, devInfo.dev , devInfo.func));
             }
         }
     }
@@ -2234,8 +2453,8 @@ void PCM::initUncorePMUsDirect()
 std::vector<int> enumeratePerfPMUs(const std::string & type, int max_id);
 void populatePerfPMUs(unsigned socket_, const std::vector<int> & ids, std::vector<UncorePMU> & pmus, bool fixed, bool filter0 = false, bool filter1 = false);
 
-std::vector<int> enumerateIDXPerfPMUs(const std::string & type, int max_id);
-void populateIDXPerfPMUs(unsigned socket_, const std::vector<int> & ids, std::vector<IDX_PMU> & pmus);
+std::vector<std::pair<int, uint32> > enumerateIDXPerfPMUs(const std::string & type, int max_id);
+void populateIDXPerfPMUs(unsigned socket_, const std::vector<std::pair<int, uint32> > & ids, std::vector<IDX_PMU> & pmus);
 #endif
 
 void PCM::initUncorePMUsPerf()
@@ -2265,11 +2484,19 @@ void PCM::initUncorePMUsPerf()
         populateMapPMUs("irp", irpPMUs);
     }
 
-    idxPMUs.resize(IDX_MAX);
-
-    populateIDXPerfPMUs(0, enumerateIDXPerfPMUs("iax", 100), idxPMUs[IDX_IAA]);
-    populateIDXPerfPMUs(0, enumerateIDXPerfPMUs("dsa", 100), idxPMUs[IDX_DSA]);
-    populateIDXPerfPMUs(0, enumerateIDXPerfPMUs("hcx", 100), idxPMUs[IDX_HCx]);
+    if (cpu_model == PCM::SPR)
+    {
+        idxPMUs.resize(IDX_MAX);
+        idxPMUs[IDX_IAA].clear();
+        idxPMUs[IDX_DSA].clear();
+        idxPMUs[IDX_QAT].clear(); //QAT NOT support perf driver mode.
+        populateIDXPerfPMUs(0, enumerateIDXPerfPMUs("iax", 100), idxPMUs[IDX_IAA]);
+        populateIDXPerfPMUs(0, enumerateIDXPerfPMUs("dsa", 100), idxPMUs[IDX_DSA]);
+#ifndef PCM_SILENT
+        std::cerr << "Info: IDX - Detected " << idxPMUs[IDX_IAA].size() << " IAA devices, " << idxPMUs[IDX_DSA].size() << " DSA devices.\n";
+        std::cerr << "Warning: IDX - QAT device NOT support perf driver mode.\n";
+#endif
+    }
 #endif
 }
 
@@ -2329,6 +2556,7 @@ class CoreTaskQueue
 public:
     CoreTaskQueue(int32 core) :
         worker([=]() {
+        try {
             TemporalThreadAffinity tempThreadAffinity(core, false);
             std::unique_lock<std::mutex> lock(m);
             while (1) {
@@ -2340,6 +2568,12 @@ public:
                     wQueue.pop();
                 }
             }
+        }
+        catch (const std::exception & e)
+        {
+            std::cerr << "PCM Error. Exception in CoreTaskQueue worker function: " << e.what() << "\n";
+        }
+
         })
     {}
     void push(std::packaged_task<void()> & task)
@@ -2876,33 +3110,50 @@ PCM::ErrorCode PCM::program(const PCM::ProgramMode mode_, const void * parameter
     }
     else if (mode != EXT_CUSTOM_CORE_EVENTS)
     {
+        auto LLCArchEventInit = [](CustomCoreEventDescription * evt)
+        {
+            evt[0].event_number = ARCH_LLC_MISS_EVTNR;
+            evt[0].umask_value = ARCH_LLC_MISS_UMASK;
+            evt[1].event_number = ARCH_LLC_REFERENCE_EVTNR;
+            evt[1].umask_value = ARCH_LLC_REFERENCE_UMASK;
+        };
         if (isAtom() || cpu_model == KNL)
         {
-            coreEventDesc[0].event_number = ARCH_LLC_MISS_EVTNR;
-            coreEventDesc[0].umask_value = ARCH_LLC_MISS_UMASK;
-            coreEventDesc[1].event_number = ARCH_LLC_REFERENCE_EVTNR;
-            coreEventDesc[1].umask_value = ARCH_LLC_REFERENCE_UMASK;
+            LLCArchEventInit(coreEventDesc);
             L2CacheHitRatioAvailable = true;
             L2CacheMissesAvailable = true;
             L2CacheHitsAvailable = true;
             core_gen_counter_num_used = 2;
         }
+        else if (memoryEventErrata())
+        {
+            LLCArchEventInit(coreEventDesc);
+            L3CacheHitRatioAvailable = true;
+            L3CacheMissesAvailable = true;
+            L2CacheMissesAvailable = true;
+            L3CacheHitsAvailable = true;
+            core_gen_counter_num_used = 2;
+            if (HASWELLX == cpu_model || HASWELL == cpu_model)
+            {
+                coreEventDesc[BasicCounterState::HSXL2MissPos].event_number = HSX_L2_RQSTS_MISS_EVTNR;
+                coreEventDesc[BasicCounterState::HSXL2MissPos].umask_value = HSX_L2_RQSTS_MISS_UMASK;
+                coreEventDesc[BasicCounterState::HSXL2RefPos].event_number = HSX_L2_RQSTS_REFERENCES_EVTNR;
+                coreEventDesc[BasicCounterState::HSXL2RefPos].umask_value = HSX_L2_RQSTS_REFERENCES_UMASK;
+                L2CacheHitRatioAvailable = true;
+                L2CacheHitsAvailable = true;
+                core_gen_counter_num_used = 4;
+            }
+        }
         else
         switch ( cpu_model ) {
             case ADL:
             case RPL:
-                hybridAtomEventDesc[0].event_number = ARCH_LLC_MISS_EVTNR;
-                hybridAtomEventDesc[0].umask_value = ARCH_LLC_MISS_UMASK;
-                hybridAtomEventDesc[1].event_number = ARCH_LLC_REFERENCE_EVTNR;
-                hybridAtomEventDesc[1].umask_value = ARCH_LLC_REFERENCE_UMASK;
+                LLCArchEventInit(hybridAtomEventDesc);
                 hybridAtomEventDesc[2].event_number = SKL_MEM_LOAD_RETIRED_L2_MISS_EVTNR;
                 hybridAtomEventDesc[2].umask_value = SKL_MEM_LOAD_RETIRED_L2_MISS_UMASK;
                 hybridAtomEventDesc[3].event_number = SKL_MEM_LOAD_RETIRED_L2_HIT_EVTNR;
                 hybridAtomEventDesc[3].umask_value = SKL_MEM_LOAD_RETIRED_L2_HIT_UMASK;
-                coreEventDesc[0].event_number = ARCH_LLC_MISS_EVTNR;
-                coreEventDesc[0].umask_value = ARCH_LLC_MISS_UMASK;
-                coreEventDesc[1].event_number = ARCH_LLC_REFERENCE_EVTNR;
-                coreEventDesc[1].umask_value = ARCH_LLC_REFERENCE_UMASK;
+                LLCArchEventInit(coreEventDesc);
                 coreEventDesc[2].event_number = SKL_MEM_LOAD_RETIRED_L2_MISS_EVTNR;
                 coreEventDesc[2].umask_value = SKL_MEM_LOAD_RETIRED_L2_MISS_UMASK;
                 coreEventDesc[3].event_number = SKL_MEM_LOAD_RETIRED_L2_HIT_EVTNR;
@@ -2917,10 +3168,7 @@ PCM::ErrorCode PCM::program(const PCM::ProgramMode mode_, const void * parameter
                 core_gen_counter_num_used = 4;
                 break;
             case SNOWRIDGE:
-                coreEventDesc[0].event_number = ARCH_LLC_MISS_EVTNR;
-                coreEventDesc[0].umask_value = ARCH_LLC_MISS_UMASK;
-                coreEventDesc[1].event_number = ARCH_LLC_REFERENCE_EVTNR;
-                coreEventDesc[1].umask_value = ARCH_LLC_REFERENCE_UMASK;
+                LLCArchEventInit(coreEventDesc);
                 coreEventDesc[2].event_number = SKL_MEM_LOAD_RETIRED_L2_MISS_EVTNR;
                 coreEventDesc[2].umask_value = SKL_MEM_LOAD_RETIRED_L2_MISS_UMASK;
                 coreEventDesc[3].event_number = SKL_MEM_LOAD_RETIRED_L2_HIT_EVTNR;
@@ -4139,6 +4387,8 @@ const char * PCM::getUArchCodename(const int32 cpu_model_param) const
             return "Cherrytrail";
         case APOLLO_LAKE:
             return "Apollo Lake";
+        case GEMINI_LAKE:
+            return "Gemini Lake";
         case DENVERTON:
             return "Denverton";
         case SNOWRIDGE:
@@ -4710,7 +4960,9 @@ void BasicCounterState::readAndAggregate(std::shared_ptr<SafeMsrHandle> msr)
 
     PCM * m = PCM::getInstance();
     assert(m);
-    if (m->canUsePerf == false)
+    const auto core_global_ctrl_value = m->core_global_ctrl_value;
+    const bool freezeUnfreeze = m->canUsePerf == false && core_global_ctrl_value != 0ULL;
+    if (freezeUnfreeze)
     {
         msr->write(IA32_CR_PERF_GLOBAL_CTRL, 0ULL); // freeze
     }
@@ -4853,10 +5105,8 @@ void BasicCounterState::readAndAggregate(std::shared_ptr<SafeMsrHandle> msr)
     RetiringSlots       += cRetiringSlots;
     AllSlotsRaw         += cAllSlotsRaw;
 
-    if (m->canUsePerf == false)
+    if (freezeUnfreeze)
     {
-        const auto core_global_ctrl_value = m->core_global_ctrl_value;
-        assert(core_global_ctrl_value);
         msr->write(IA32_CR_PERF_GLOBAL_CTRL, core_global_ctrl_value); // unfreeze
     }
 }
@@ -5078,40 +5328,37 @@ PCM::ErrorCode PCM::program(const RawPMUConfigs& curPMUConfigs_, const bool sile
     threadMSRConfig = RawPMUConfig{};
     packageMSRConfig = RawPMUConfig{};
     RawPMUConfigs curPMUConfigs = curPMUConfigs_;
-    constexpr auto globalRegPos = 0;
-    if (curPMUConfigs.count("core"))
+    constexpr auto globalRegPos = 0ULL;
+    PCM::ExtendedCustomCoreEventDescription conf;
+    auto updateRegs = [this, &conf](const RawPMUConfig& corePMUConfig, EventSelectRegister* regs) -> bool
     {
-        // need to program core PMU first
-        EventSelectRegister regs[PERF_MAX_CUSTOM_COUNTERS];
-        PCM::ExtendedCustomCoreEventDescription conf;
-        conf.OffcoreResponseMsrValue[0] = 0;
-        conf.OffcoreResponseMsrValue[1] = 0;
-        FixedEventControlRegister fixedReg;
-
-        auto corePMUConfig = curPMUConfigs["core"];
         if (corePMUConfig.programmable.size() > (size_t)getMaxCustomCoreEvents())
         {
-            std::cerr << "ERROR: trying to program " << corePMUConfig.programmable.size() << " core PMU counters, which exceeds the max num possible ("<< getMaxCustomCoreEvents() << ").\n";
-            for (const auto & e : corePMUConfig.programmable)
+            std::cerr << "ERROR: trying to program " << corePMUConfig.programmable.size() << " core PMU counters, which exceeds the max num possible (" << getMaxCustomCoreEvents() << ").\n";
+            for (const auto& e : corePMUConfig.programmable)
             {
                 std::cerr << "      Event: " << e.second << "\n";
             }
-            return PCM::UnknownError;
+            return false;
         }
         size_t c = 0;
         for (; c < corePMUConfig.programmable.size() && c < (size_t)getMaxCustomCoreEvents() && c < PERF_MAX_CUSTOM_COUNTERS; ++c)
         {
             regs[c].value = corePMUConfig.programmable[c].first[0];
         }
-        if (globalRegPos < corePMUConfig.programmable.size())
+        conf.nGPCounters = (std::max)((uint32)c, conf.nGPCounters);
+        return true;
+    };
+    FixedEventControlRegister fixedReg;
+    auto setOtherConf = [&conf, &fixedReg, &globalRegPos](const RawPMUConfig& corePMUConfig)
+    {
+        if ((size_t)globalRegPos < corePMUConfig.programmable.size())
         {
             conf.OffcoreResponseMsrValue[0] = corePMUConfig.programmable[globalRegPos].first[OCR0Pos];
             conf.OffcoreResponseMsrValue[1] = corePMUConfig.programmable[globalRegPos].first[OCR1Pos];
             conf.LoadLatencyMsrValue = corePMUConfig.programmable[globalRegPos].first[LoadLatencyPos];
             conf.FrontendMsrValue = corePMUConfig.programmable[globalRegPos].first[FrontendPos];
         }
-        conf.nGPCounters = (uint32)c;
-        conf.gpCounterCfg = regs;
         if (corePMUConfig.fixed.empty())
         {
             conf.fixedCfg = NULL; // default
@@ -5119,20 +5366,63 @@ PCM::ErrorCode PCM::program(const RawPMUConfigs& curPMUConfigs_, const bool sile
         else
         {
             fixedReg.value = 0;
-            for (const auto & cfg : corePMUConfig.fixed)
+            for (const auto& cfg : corePMUConfig.fixed)
             {
                 fixedReg.value |= uint64(cfg.first[0]);
             }
             conf.fixedCfg = &fixedReg;
         }
+    };
+    EventSelectRegister regs[PERF_MAX_CUSTOM_COUNTERS];
+    EventSelectRegister atomRegs[PERF_MAX_CUSTOM_COUNTERS];
+    conf.OffcoreResponseMsrValue[0] = 0;
+    conf.OffcoreResponseMsrValue[1] = 0;
+    if (curPMUConfigs.count("core") > 0)
+    {
+        // need to program core PMU first
+        const auto & corePMUConfig = curPMUConfigs["core"];
+        if (updateRegs(corePMUConfig, regs) == false)
+        {
+            return PCM::UnknownError;
+        }
+        conf.gpCounterCfg = regs;
+        setOtherConf(corePMUConfig);
         conf.defaultUncoreProgramming = false;
+        curPMUConfigs.erase("core");
+
+        if (curPMUConfigs.count("atom"))
+        {
+            const auto & atomPMUConfig = curPMUConfigs["atom"];
+            if (updateRegs(atomPMUConfig, atomRegs) == false)
+            {
+                return PCM::UnknownError;
+            }
+            conf.gpCounterHybridAtomCfg = atomRegs;
+            curPMUConfigs.erase("atom");
+        }
+        const auto status = program(PCM::EXT_CUSTOM_CORE_EVENTS, &conf, silent, pid);
+        if (status != PCM::Success)
+        {
+            return status;
+        }
+    }
+    else if (curPMUConfigs.count("atom") > 0) // no core, only atom
+    {
+        const auto& atomPMUConfig = curPMUConfigs["atom"];
+        if (updateRegs(atomPMUConfig, atomRegs) == false)
+        {
+            return PCM::UnknownError;
+        }
+        conf.gpCounterHybridAtomCfg = atomRegs;
+        setOtherConf(atomPMUConfig);
+        conf.defaultUncoreProgramming = false;
+        curPMUConfigs.erase("atom");
 
         const auto status = program(PCM::EXT_CUSTOM_CORE_EVENTS, &conf, silent, pid);
         if (status != PCM::Success)
         {
             return status;
         }
-        curPMUConfigs.erase("core");
     }
     for (auto& pmuConfig : curPMUConfigs)
     {
@@ -6210,14 +6500,15 @@ bool PCM::useLinuxPerfForUncore() const
         std::cerr << "INFO: Secure Boot detected. Using Linux perf for uncore PMU programming.\n";
         use = 1;
     }
-    else
-#endif
+#else
+    if (1)
     {
         if (secureBoot)
         {
             std::cerr << "ERROR: Secure Boot detected. Recompile PCM with -DPCM_USE_PERF or disable Secure Boot.\n";
         }
     }
+#endif
     return 1 == use;
 }
 
@@ -6962,21 +7253,6 @@ bool ServerPCICFGUncore::HBMAvailable() const
 
 
 #ifdef PCM_USE_PERF
-class PerfVirtualDummyUnitControlRegister : public HWRegister
-{
-    uint64 lastValue;
-public:
-    PerfVirtualDummyUnitControlRegister() : lastValue(0) {}
-    void operator = (uint64 val) override
-    {
-        lastValue = val;
-    }
-    operator uint64 () override
-    {
-        return lastValue;
-    }
-};
-
 class PerfVirtualFilterRegister;
 
 class PerfVirtualControlRegister : public HWRegister
@@ -6997,6 +7273,8 @@ class PerfVirtualControlRegister : public HWRegister
             fd = -1;
         }
     }
+    PerfVirtualControlRegister(const PerfVirtualControlRegister &) = delete;
+    PerfVirtualControlRegister & operator = (const PerfVirtualControlRegister &) = delete;
 public:
     PerfVirtualControlRegister(int socket_, int pmuID_, bool fixed_ = false) :
         fd(-1),
@@ -7200,7 +7478,7 @@ void populatePerfPMUs(unsigned socket_, const std::vector<int> & ids, std::vecto
         std::shared_ptr<PerfVirtualFilterRegister> filterReg1 = std::make_shared<PerfVirtualFilterRegister>(controlRegs, 1);
         pmus.push_back(
             UncorePMU(
-                std::make_shared<PerfVirtualDummyUnitControlRegister>(),
+                std::make_shared<VirtualDummyRegister>(),
                 controlRegs[0],
                 controlRegs[1],
                 controlRegs[2],
@@ -7218,9 +7496,9 @@ void populatePerfPMUs(unsigned socket_, const std::vector<int> & ids, std::vecto
     }
 }
 
-
-std::vector<int> enumerateIDXPerfPMUs(const std::string & type, int max_id)
+std::vector<std::pair<int, uint32> > enumerateIDXPerfPMUs(const std::string & type, int max_id)
 {
+    uint32 numaNode=0xff;
     auto getPerfPMUID = [](const std::string & type, int num)
     {
         int id = -1;
@@ -7238,22 +7516,36 @@ std::vector<int> enumerateIDXPerfPMUs(const std::string & type, int max_id)
         }
         return id;
     };
-    std::vector<int> ids;
+
+    //Enumurate IDX devices by linux sysfs scan
+    std::vector<std::pair<int, uint32> > ids;
     for (int i = -1; i < max_id; ++i)
     {
         int pmuID = getPerfPMUID(type, i);
         if (pmuID > 0)
         {
+            numaNode = 0xff;
+            std::ostringstream devNumaNodePath(std::ostringstream::out);
+            devNumaNodePath << std::string("/sys/bus/dsa/devices/") << type << i << "/numa_node";
+            const std::string devNumaNodeStr = readSysFS(devNumaNodePath.str().c_str(), true);
+            if (devNumaNodeStr.size())
+            {
+                numaNode = std::atoi(devNumaNodeStr.c_str());
+                if (numaNode == (std::numeric_limits<uint32>::max)())
+                {
+                    numaNode = 0xff; //translate to special value for numa disable case.
+                }
+            }
             //std::cout << "IDX DEBUG: " << type << " pmu id " << pmuID << " found\n";
-            ids.push_back(pmuID);
+            //std::cout << "IDX DEBUG: numa node file path=" << devNumaNodePath.str().c_str()  << ", value=" << numaNode << std::endl;
+            ids.push_back(std::make_pair(pmuID, numaNode));
         }
     }
-
+    
     return ids;
 }
 
-
-void populateIDXPerfPMUs(unsigned socket_, const std::vector<int> & ids, std::vector<IDX_PMU> & pmus)
+void populateIDXPerfPMUs(unsigned socket_, const std::vector<std::pair<int, uint32> > & ids, std::vector<IDX_PMU> & pmus)
 {
     for (const auto & id : ids)
     {
@@ -7265,7 +7557,7 @@ void populateIDXPerfPMUs(unsigned socket_, const std::vector<int> & ids, std::ve
 
         for (size_t r = 0; r < n_regs; ++r)
         {
-            auto CounterControlReg = std::make_shared<PerfVirtualControlRegister>(socket_, id);
+            auto CounterControlReg = std::make_shared<PerfVirtualControlRegister>(socket_, id.first);
 
             CounterControlRegs.push_back(CounterControlReg);
             CounterValueRegs.push_back(std::make_shared<PerfVirtualCounterRegister>(CounterControlReg));
@@ -7279,8 +7571,11 @@ void populateIDXPerfPMUs(unsigned socket_, const std::vector<int> & ids, std::ve
         pmus.push_back(
             IDX_PMU(
                 true,
-                std::make_shared<PerfVirtualDummyUnitControlRegister>(),
-                std::make_shared<PerfVirtualDummyUnitControlRegister>(),
+                id.second,
+                0xff,//No support of socket location in perf driver mode.
+                std::make_shared<VirtualDummyRegister>(),
+                std::make_shared<VirtualDummyRegister>(),
+                std::make_shared<VirtualDummyRegister>(),
                 CounterControlRegs,
                 CounterValueRegs,
                 CounterFilterWQRegs,
@@ -8373,9 +8668,9 @@ uint32 PCM::getMaxNumOfCBoxes() const
             {
                 uint32 value;
                 h->read32(0x9c, &value);
-                num = weight32(value);
+                num = (uint32)weight32(value);
                 h->read32(0xa0, &value);
-                num += weight32(value);
+                num += (uint32)weight32(value);
                 delete h;
             }
         }
@@ -8405,7 +8700,8 @@ uint32 PCM::getMaxNumOfCBoxes() const
          */
         num = (uint32)num_phys_cores_per_socket;
     }
-    return num;
+    assert(num >= 0);
+    return (uint32)num;
 }
 
 uint32 PCM::getMaxNumOfIIOStacks() const
@@ -8676,9 +8972,27 @@ void PCM::programUBOX(const uint64* events)
     }
 }
 
+void PCM::controlQATTelemetry(uint32 dev, uint32 operation)
+{
+    if (getNumOfIDXAccelDevs(IDX_QAT) == 0 || dev >= getNumOfIDXAccelDevs(IDX_QAT) || operation >= PCM::QAT_TLM_MAX)
+        return;
+
+    auto &gControl_reg = idxPMUs[IDX_QAT][dev].generalControl;
+    switch (operation)
+    {
+        case PCM::QAT_TLM_START:
+        case PCM::QAT_TLM_STOP:
+        case PCM::QAT_TLM_REFRESH:
+            *gControl_reg = operation;
+            break;
+        default:
+            break;
+    }
+}
+
 void PCM::programIDXAccelCounters(uint32 accel, std::vector<uint64_t> &events, std::vector<uint32_t> &filters_wq, std::vector<uint32_t> &filters_eng, std::vector<uint32_t> &filters_tc, std::vector<uint32_t> &filters_pgsz, std::vector<uint32_t> &filters_xfersz)
 {
-    uint32 maxCTR = getMaxNumOfIDXAccelCtrs(); //limit the number of physical counter to use
+    uint32 maxCTR = getMaxNumOfIDXAccelCtrs(accel); //limit the number of physical counter to use
 
     if (events.size() == 0 || accel >= IDX_MAX || getNumOfIDXAccelDevs(accel) == 0)
         return; //invalid input parameter or IDX accel dev NOT exist
@@ -8705,20 +9019,30 @@ void PCM::programIDXAccelCounters(uint32 accel, std::vector<uint64_t> &events, s
                 *ctrl_reg = 0x0;
             }
 
-            *filter_wq_reg = (filters_wq.at(i) & 0xFFFF);            
-            *filter_eng_reg = (filters_eng.at(i) & 0xFFFF);
-            *filter_tc_reg = (filters_tc.at(i) & 0xFF);
-            *filter_pgsz_reg = (filters_pgsz.at(i) & 0xFF);
-            *filter_xfersz_reg = (filters_xfersz.at(i) & 0xFF);
+            *filter_wq_reg = extract_bits_ui(filters_wq.at(i), 0, 15);            
+            *filter_eng_reg = extract_bits_ui(filters_eng.at(i), 0, 15);
+            *filter_tc_reg = extract_bits_ui(filters_tc.at(i), 0, 7);
+            *filter_pgsz_reg = extract_bits_ui(filters_pgsz.at(i), 0, 7);
+            *filter_xfersz_reg = extract_bits_ui(filters_xfersz.at(i), 0, 7);
 
             if (pmu.getPERFMode() == false)
             {
                 *ctrl_reg = events.at(i);
             }
             else{
-                //translate the event config from raw to perf format in Linux perf mode.
-                //please reference the bitmap from DSA EAS spec and linux idxd driver perfmon interface.
-                *ctrl_reg = (((events.at(i) & 0xF00) >> 8) | ((events.at(i) & 0xFFFFFFF00000000) >> 28));
+                switch (accel)
+                {
+                    case IDX_IAA:
+                    case IDX_DSA:
+                        //translate the event config from raw to perf format in Linux perf mode.
+                        //please reference the bitmap from DSA EAS spec and linux idxd driver perfmon interface.
+                        *ctrl_reg = ((extract_bits(events.at(i), 8, 11)) | ((extract_bits(events.at(i), 32, 59)) << 4));
+                        break;
+                    case IDX_QAT://QAT NOT support perf mode
+                        break;
+                    default:
+                        break;
+                }
             }
         }
 
@@ -8730,7 +9054,7 @@ IDXCounterState PCM::getIDXAccelCounterState(uint32 accel, uint32 dev, uint32 co
 {
     IDXCounterState result;
 
-    if (accel >= IDX_MAX || dev >= getNumOfIDXAccelDevs(accel) || counter_id >= getMaxNumOfIDXAccelCtrs())
+    if (accel >= IDX_MAX || dev >= getNumOfIDXAccelDevs(accel) || counter_id >= getMaxNumOfIDXAccelCtrs(accel))
         return result;
 
     result.data = *idxPMUs[accel][dev].counterValue[counter_id];
@@ -8745,18 +9069,47 @@ uint32 PCM::getNumOfIDXAccelDevs(int accel) const
     return idxPMUs[accel].size();
 }
 
-uint32 PCM::getMaxNumOfIDXAccelCtrs() const
+uint32 PCM::getMaxNumOfIDXAccelCtrs(int accel) const
 {
     switch (this->getCPUModel())
     {
         case PCM::SPR:
-            return SPR_IDX_ACCEL_COUNTER_MAX_NUM;
+            if (accel == IDX_IAA || accel == IDX_DSA)
+            {
+                return SPR_IDX_ACCEL_COUNTER_MAX_NUM;
+            }
+            else if(accel == IDX_QAT)
+            {
+                return SPR_QAT_ACCEL_COUNTER_MAX_NUM;
+            }
 
         default:
             break;
     }
 
     return 0;
+}
+
+uint32 PCM::getNumaNodeOfIDXAccelDev(uint32 accel, uint32 dev) const
+{
+    uint32 numa_node = 0xff;
+
+    if (accel >= IDX_MAX || dev >= getNumOfIDXAccelDevs(accel))
+        return numa_node;
+
+    numa_node = idxPMUs[accel][dev].getNumaNode();
+    return numa_node;
+}
+
+uint32 PCM::getCPUSocketIdOfIDXAccelDev(uint32 accel, uint32 dev) const
+{
+    uint32 socketid = 0xff;
+
+    if (accel >= IDX_MAX || dev >= getNumOfIDXAccelDevs(accel))
+        return socketid;
+
+    socketid = idxPMUs[accel][dev].getSocketId();
+    return socketid;
 }
 
 uint64 PCM::getCBOCounterState(const uint32 socket_, const uint32 ctr_)
@@ -8805,6 +9158,7 @@ void PCM::initLLCReadMissLatencyEvents(uint64 * events, uint32 & opCode)
     switch (cpu_model)
     {
         case ICX:
+        case SPR:
         case SNOWRIDGE:
             umask = 1ULL;
             break;
@@ -8818,6 +9172,9 @@ void PCM::initLLCReadMissLatencyEvents(uint64 * events, uint32 & opCode)
     {
         case ICX:
             umask_ext = 0xC817FE;
+            break;
+        case SPR:
+            umask_ext = 0x00C817FE;
             break;
         case SNOWRIDGE:
             umask_ext = 0xC827FE;
@@ -8993,8 +9350,11 @@ void UncorePMU::resetUnfreeze(const uint32 extra)
 }
 
 IDX_PMU::IDX_PMU(const bool perfMode_,
+        const uint32 numaNode_,
+        const uint32 socketId_,
         const HWRegisterPtr& resetControl_,
         const HWRegisterPtr& freezeControl_,
+        const HWRegisterPtr& generalControl_,
         const std::vector<HWRegisterPtr> & counterControl,
         const std::vector<HWRegisterPtr> & counterValue,
         const std::vector<HWRegisterPtr> & counterFilterWQ,
@@ -9005,8 +9365,11 @@ IDX_PMU::IDX_PMU(const bool perfMode_,
     ) : 
     cpu_model_(0),
     perf_mode_(perfMode_),
+    numa_node_(numaNode_),
+    socket_id_(socketId_),
     resetControl(resetControl_),
     freezeControl(freezeControl_),
+    generalControl(generalControl_),
     counterControl{counterControl},
     counterValue{counterValue},
     counterFilterWQ{counterFilterWQ},
@@ -9043,6 +9406,10 @@ void IDX_PMU::cleanup()
         *resetControl = 0x3;
     }
 
+    if (generalControl.get())
+    {
+        *generalControl = 0x0; //disable the entire service e.g QAT telemetry.
+    }
     //std::cout << "IDX_PMU::cleanup \n";
 }
 
@@ -9076,6 +9443,16 @@ void IDX_PMU::resetUnfreeze()
 bool IDX_PMU::getPERFMode()
 {
     return perf_mode_;
+}
+
+uint32 IDX_PMU::getNumaNode() const
+{
+    return numa_node_;
+}
+
+uint32 IDX_PMU::getSocketId() const
+{
+    return socket_id_;
 }
 
 IIOCounterState PCM::getIIOCounterState(int socket, int IIOStack, int counter)

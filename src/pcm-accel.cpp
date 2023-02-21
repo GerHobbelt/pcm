@@ -84,7 +84,7 @@ idx_ccr* idx_get_ccr(PCM* m, uint64_t& ccr)
         case PCM::SPR:
             return new spr_idx_ccr(ccr);
         default:
-            std::cerr << m->getCPUFamilyModelString() << " is not supported! Program aborted" << endl;
+            std::cerr << m->getCPUFamilyModelString() << " is not supported! Program aborted.\n";
             exit(EXIT_FAILURE);
     }
 }
@@ -93,6 +93,7 @@ typedef enum
 {
     ACCEL_IAA,
     ACCEL_DSA,
+    ACCEL_QAT,
     ACCEL_MAX,
 } ACCEL_IP;
 
@@ -105,6 +106,19 @@ enum IDXPerfmonField
     FILTER_TC,
     FILTER_PGSZ,
     FILTER_XFERSZ
+};
+
+typedef enum
+{
+    SOCKET_MAP,
+    NUMA_MAP,
+} ACCEL_DEV_LOC_MAPPING;
+
+const std::vector<uint32_t> idx_accel_mapping = 
+{
+    PCM::IDX_IAA,
+    PCM::IDX_DSA,
+    PCM::IDX_QAT
 };
 
 #define ACCEL_IP_DEV_COUNT_MAX (16)
@@ -149,6 +163,9 @@ uint32_t getNumOfAccelDevs(PCM *m, ACCEL_IP accel)
         case ACCEL_DSA:
             dev_count = m->getNumOfIDXAccelDevs(PCM::IDX_DSA);
             break;
+        case ACCEL_QAT:
+            dev_count = m->getNumOfIDXAccelDevs(PCM::IDX_QAT);
+            break;
         default:
             dev_count = 0;
             break;
@@ -168,7 +185,8 @@ uint32_t getMaxNumOfAccelCtrs(PCM *m, ACCEL_IP accel)
     {
         case ACCEL_IAA:
         case ACCEL_DSA:
-            ctr_count = m->getMaxNumOfIDXAccelCtrs();
+        case ACCEL_QAT:
+            ctr_count = m->getMaxNumOfIDXAccelCtrs(accel);
             break;
         default:
             ctr_count = 0;
@@ -190,6 +208,7 @@ int32_t programAccelCounters(PCM *m, ACCEL_IP accel, std::vector<struct accel_co
     {
         case ACCEL_IAA:
         case ACCEL_DSA:
+        case ACCEL_QAT:
             for (auto pctr = ctrs.begin(); pctr != ctrs.end(); ++pctr)
             {
                 rawEvents.push_back(pctr->ccr);
@@ -201,7 +220,7 @@ int32_t programAccelCounters(PCM *m, ACCEL_IP accel, std::vector<struct accel_co
                 //std::cout<<"ctr idx=0x" << std::hex << pctr->idx << " hid=0x" << std::hex << pctr->h_id << " vid=0x" << std::hex << pctr->v_id <<" ccr=0x" << std::hex << pctr->ccr << "\n";
                 //std::cout<<"mul=0x" << std::hex << pctr->multiplier << " div=0x" << std::hex << pctr->divider << "\n";
             }
-            m->programIDXAccelCounters((accel == ACCEL_IAA ? PCM::IDX_IAA : PCM::IDX_DSA), rawEvents, filters_wq, filters_eng, filters_tc, filters_pgsz, filters_xfersz);
+            m->programIDXAccelCounters(idx_accel_mapping[accel], rawEvents, filters_wq, filters_eng, filters_tc, filters_pgsz, filters_xfersz);
             break;
         default:
             break;
@@ -221,6 +240,7 @@ SimpleCounterState getAccelCounterState(PCM *m, ACCEL_IP accel, uint32 dev, uint
     {
         case ACCEL_IAA:
         case ACCEL_DSA:
+        case ACCEL_QAT:
             result = m->getIDXAccelCounterState(accel, dev, ctr_index);
             break;
         default:
@@ -255,6 +275,9 @@ std::string getAccelCounterName(ACCEL_IP accel)
         case ACCEL_DSA:
             ret = "dsa";
             break;
+        case ACCEL_QAT:
+            ret = "qat";
+            break;
         default:
             ret = "id=" + std::to_string(accel) + "(unknown)";
             break;
@@ -263,16 +286,48 @@ std::string getAccelCounterName(ACCEL_IP accel)
     return ret;
 }
 
-std::vector<std::string> build_counter_names(std::string dev_name, std::vector<struct accel_counter>& ctrs)
+bool getAccelDevLocation(PCM *m, const ACCEL_IP accel, uint32_t dev, const ACCEL_DEV_LOC_MAPPING loc_map, uint32_t &location)
+{
+    bool ret = true;
+    
+    switch (loc_map)
+    {
+        case SOCKET_MAP:
+            location = m->getCPUSocketIdOfIDXAccelDev(accel, dev);
+            break;
+        case NUMA_MAP:
+            location = m->getNumaNodeOfIDXAccelDev(accel, dev);
+            break;
+        default:
+            ret = false;
+            break;
+    }
+    
+    return ret;
+}
+
+std::vector<std::string> build_counter_names(std::string dev_name, std::vector<struct accel_counter>& ctrs, const ACCEL_DEV_LOC_MAPPING loc_map)
 {
     std::vector<std::string> v;
     std::map<uint32_t,std::map<uint32_t,struct accel_counter*>> v_sort;
 
     v.push_back(dev_name);
+    
+    switch (loc_map)
+    {
+        case SOCKET_MAP:
+            v.push_back("Socket");
+            break;
+        case NUMA_MAP:
+            v.push_back("NUMA Node");
+            break;
+        default:
+            break;
+    }
+
     //re-organize data collection to be row wise
     for (std::vector<struct accel_counter>::iterator counter = ctrs.begin(); counter != ctrs.end(); ++counter)
     {
-        
         v_sort[counter->h_id][counter->v_id] = &(*counter);
     }
     
@@ -302,6 +357,10 @@ void print_usage(const std::string& progname)
     std::cout << "  -silent                            => silence information output and print only measurements\n";
     std::cout << "  -iaa | /iaa                        => print IAA accel device measurements(default)\n";
     std::cout << "  -dsa | /dsa                        => print DSA accel device measurements\n";
+#ifdef __linux__
+    std::cout << "  -qat | /qat                        => print QAT accel device measurements\n";
+    std::cout << "  -numa | /numa                      => print accel device numa node mapping(for linux only)\n";
+#endif
     std::cout << "  -evt[=cfg.txt] | /evt[=cfg.txt]    => specify the event cfg file to cfg.txt \n";
     std::cout << "  -csv[=file.csv] | /csv[=file.csv]  => output compact CSV format to screen or\n"
          << "                                        to a file, in case filename is provided\n";
@@ -315,14 +374,15 @@ void print_usage(const std::string& progname)
     std::cout << "\n";
 }
 
-std::vector<std::string> build_csv(const uint32_t dev_count, const ACCEL_IP accel, std::vector<struct accel_counter>& ctrs,
-    const bool human_readable, const std::string& csv_delimiter, accel_content& sample_data)
+std::vector<std::string> build_csv(PCM *m, const ACCEL_IP accel, std::vector<struct accel_counter>& ctrs,
+    const bool human_readable, const std::string& csv_delimiter, accel_content& sample_data, const ACCEL_DEV_LOC_MAPPING loc_map)
 {
     std::vector<std::string> result;
     std::vector<std::string> current_row;
-    auto header = build_counter_names("Accelerator", ctrs);
+    auto header = build_counter_names("Accelerator", ctrs, loc_map);
     result.push_back(build_csv_row(header, csv_delimiter));
     std::map<uint32_t,std::map<uint32_t,struct accel_counter*>> v_sort;
+    uint32_t dev_count = getNumOfAccelDevs(m, accel);
 
     for (uint32_t dev = 0; dev != dev_count; ++dev) 
     {
@@ -343,17 +403,24 @@ std::vector<std::string> build_csv(const uint32_t dev_count, const ACCEL_IP acce
             uint32_t hh_id = hunit->first;
             std::vector<uint64_t> v_data;
             std::string h_name = v_array[0]->h_event_name + "#" + std::to_string(dev);
-                
+            uint32 location = 0xff;
+
             current_row.clear();
-            current_row.push_back(h_name);
+            current_row.push_back(h_name); //dev name
+			
+            if (getAccelDevLocation(m, accel, dev, loc_map, location) == true)
+            {
+                current_row.push_back(std::to_string(location)); //location info
+            }
+
+            //std::cout << "location mapping=" << loc_map << ", data=" << location << "\n";
             //std::cout << "hunit: hhid=" << hh_id << "\n";
             for (std::map<uint32_t,struct accel_counter*>::const_iterator vunit = v_array.cbegin(); vunit != v_array.cend(); ++vunit)
             {
                 uint32_t vv_id = vunit->first;
                 uint64_t raw_data = sample_data[accel][dev][std::pair<h_id,v_id>(hh_id,vv_id)];
                 //std::cout << "vunit: hhid=" << hh_id << ", vname=" << vunit->second->v_event_name << ", data=" << raw_data << "\n";
-
-                current_row.push_back(human_readable ? unit_format(raw_data) : std::to_string(raw_data));
+                current_row.push_back(human_readable ? unit_format(raw_data) : std::to_string(raw_data)); //counter data
             }
             result.push_back(build_csv_row(current_row, csv_delimiter));
         }
@@ -362,14 +429,15 @@ std::vector<std::string> build_csv(const uint32_t dev_count, const ACCEL_IP acce
     return result;
 }
 
-std::vector<std::string> build_display(const uint32_t dev_count, const ACCEL_IP accel, std::vector<struct accel_counter>& ctrs, accel_content& sample_data)
+std::vector<std::string> build_display(PCM *m, const ACCEL_IP accel, std::vector<struct accel_counter>& ctrs, accel_content& sample_data, const ACCEL_DEV_LOC_MAPPING loc_map)
 {
     std::vector<std::string> buffer;
     std::vector<std::string> headers;
     std::vector<struct data> data;
     std::string row;
+    uint32_t dev_count = getNumOfAccelDevs(m, accel);
 
-    headers = build_counter_names("Accelerator", ctrs);
+    headers = build_counter_names("Accelerator", ctrs, loc_map);
     //Print first row
     row = std::accumulate(headers.begin(), headers.end(), std::string(" "), a_header_footer);
     buffer.push_back(row);
@@ -398,19 +466,28 @@ std::vector<std::string> build_display(const uint32_t dev_count, const ACCEL_IP 
             uint32_t hh_id = hunit->first;
             std::vector<uint64_t> v_data;
             std::string h_name = v_array[0]->h_event_name;
+            uint32 location = 0xff;
+            
+            if (getAccelDevLocation(m, accel, dev, loc_map, location) == true)
+            {
+                v_data.push_back(location); //location info
+            }
+
+            //std::cout << "location mapping=" << loc_map << ", data=" << location << "\n";
             //std::cout << "hunit: hhid=" << hh_id << "\n";
             for (std::map<uint32_t,struct accel_counter*>::const_iterator vunit = v_array.cbegin(); vunit != v_array.cend(); ++vunit)
             {
                 uint32_t vv_id = vunit->first;
                 uint64_t raw_data = sample_data[accel][dev][std::pair<h_id,v_id>(hh_id,vv_id)];
                 //std::cout << "vunit: hhid=" << hh_id << ", vname=" << vunit->second->v_event_name << ", data=" << raw_data << "\n";
-                v_data.push_back(raw_data);
+                v_data.push_back(raw_data); //counter data
             }
             data = prepare_data(v_data, headers);
 
-            row = "| " + h_name + "#" + std::to_string(dev);
+            row = "| " + h_name + "#" + std::to_string(dev); //dev name
             row += std::string(abs(int(headers[0].size() - (row.size() - 1))), ' ');
             row += std::accumulate(data.begin(), data.end(), std::string("|"), a_data);
+
             buffer.push_back(row);
         }
 
@@ -433,38 +510,64 @@ void collect_data(PCM *m, const double delay, const ACCEL_IP accel, std::vector<
     const uint32_t dev_count = getNumOfAccelDevs(m, accel);
     const uint32_t counter_nb = ctrs.size();
     uint32_t ctr_index = 0;
-    
+
     before = new SimpleCounterState[dev_count*counter_nb];
     after = new SimpleCounterState[dev_count*counter_nb];
 
     programAccelCounters(m, accel, ctrs);
 
-    for (uint32_t dev = 0; dev != dev_count; ++dev)
+    switch (accel)
     {
-        ctr_index = 0;
-        for (auto pctr = ctrs.begin(); pctr != ctrs.end(); ++pctr)
-        {
-            before[dev*counter_nb + ctr_index] = getAccelCounterState(m, accel, dev, ctr_index);
-            ctr_index++;
-        }
-    }
+        case ACCEL_IAA:
+        case ACCEL_DSA:
+            for (uint32_t dev = 0; dev != dev_count; ++dev)
+            {
+                ctr_index = 0;
+                for (auto pctr = ctrs.begin(); pctr != ctrs.end(); ++pctr)
+                {
+                    before[dev*counter_nb + ctr_index] = getAccelCounterState(m, accel, dev, ctr_index);
+                    ctr_index++;
+                }
+            }
+            MySleepMs(delay_ms);
+            for (uint32_t dev = 0; dev != dev_count; ++dev)
+            {
+                ctr_index = 0;
+                for (auto pctr = ctrs.begin();pctr != ctrs.end(); ++pctr)
+                {
+                    after[dev*counter_nb + ctr_index] = getAccelCounterState(m, accel, dev, ctr_index);
+                    uint64_t raw_result = getNumberOfEvents(before[dev*counter_nb + ctr_index], after[dev*counter_nb + ctr_index]);
+                    uint64_t trans_result = uint64_t (raw_result * pctr->multiplier / (double) pctr->divider * (1000 / (double) delay_ms));
+                    accel_results[accel][dev][std::pair<h_id,v_id>(pctr->h_id,pctr->v_id)] = trans_result;
+                    //std::cout << "collect_data: accel=" << accel << " dev=" << dev << " h_id=" << pctr->h_id << " v_id=" << pctr->v_id << " data=" << std::hex << trans_result << "\n";
+                    ctr_index++;
+                }
+            }
+            break;
 
-    MySleepMs(delay_ms);
+        case ACCEL_QAT:
+            MySleepMs(delay_ms);
 
-    for (uint32_t dev = 0; dev != dev_count; ++dev)
-    {
-        ctr_index = 0;
-        for (auto pctr = ctrs.begin();pctr != ctrs.end(); ++pctr)
-        {
-            after[dev*counter_nb + ctr_index] = getAccelCounterState(m, accel, dev, ctr_index);
+            for (uint32_t dev = 0; dev != dev_count; ++dev)
+            {
+               m->controlQATTelemetry(dev, PCM::QAT_TLM_REFRESH);
+               ctr_index = 0;
+               for (auto pctr = ctrs.begin();pctr != ctrs.end(); ++pctr)
+               {
+                   after[dev*counter_nb + ctr_index] = getAccelCounterState(m, accel, dev, ctr_index);
 
-            uint64_t raw_result = getNumberOfEvents(before[dev*counter_nb + ctr_index], after[dev*counter_nb + ctr_index]);
-            uint64_t trans_result = uint64_t (raw_result * pctr->multiplier / (double) pctr->divider * (1000 / (double) delay_ms));
+                   uint64_t raw_result = after[dev*counter_nb + ctr_index].getRawData();
+                   uint64_t trans_result = uint64_t (raw_result * pctr->multiplier / (double) pctr->divider );
 
-            accel_results[accel][dev][std::pair<h_id,v_id>(pctr->h_id,pctr->v_id)] = trans_result;
-            //std::cout << "collect_data: accel=" << accel << " dev=" << dev << " h_id=" << pctr->h_id << " v_id=" << pctr->v_id << " data=" << std::hex << trans_result << "\n";
-            ctr_index++;
-        }
+                   accel_results[accel][dev][std::pair<h_id,v_id>(pctr->h_id,pctr->v_id)] = trans_result;
+                   //std::cout << "collect_data: accel=" << accel << " dev=" << dev << " h_id=" << pctr->h_id << " v_id=" << pctr->v_id << " data=" << std::hex << trans_result << "\n";
+                   ctr_index++;
+               }
+            }
+            break;
+
+        default:
+            break;
     }
 
     delete[] before;
@@ -489,7 +592,7 @@ int idx_evt_parse_handler(evt_cb_type cb_type, void *cb_ctx, counter &base_ctr, 
     {
         std::unique_ptr<idx_ccr> pccr(idx_get_ccr(m, context->ctr.ccr));
 
-        //std::cout << "Key:" << key << " Value:" << value << " opcodeFieldMap[key]:" << opcodeFieldMap[key] << "\n";
+        //std::cout << "Key:" << key << " Value:" << value << " opcodeFieldMap[key]:" << ofm[key] << "\n";
         switch (ofm[key]) 
         { 
             case PCM::EVENT_SELECT:
@@ -535,6 +638,10 @@ int idx_evt_parse_handler(evt_cb_type cb_type, void *cb_ctx, counter &base_ctr, 
         {
             return 0; //skip non-DSA cfg line
         }
+        else if(context->accel == ACCEL_QAT && base_ctr.h_event_name != "QAT")
+        {
+            return 0; //skip non-QAT cfg line
+        }
 
         //Validate the total number of counter exceed the maximum or not.
         if ((uint32)base_ctr.idx >= getMaxNumOfAccelCtrs(m, context->accel))
@@ -561,7 +668,9 @@ int idx_evt_parse_handler(evt_cb_type cb_type, void *cb_ctx, counter &base_ctr, 
 
 typedef int (*pfn_evt_handler)(evt_cb_type, void *, counter &, std::map<std::string, uint32_t> &, std::string, uint64);
 
-int main(int argc, char * argv[])
+PCM_MAIN_NOTHROW;
+
+int mainThrows(int argc, char * argv[])
 {
     null_stream nullStream;
     check_and_set_silent(argc, argv, nullStream);
@@ -579,6 +688,7 @@ int main(int argc, char * argv[])
     ACCEL_IP accel=ACCEL_IAA; //default is IAA
     bool evtfile = false;
     std::string specify_evtfile;
+    ACCEL_DEV_LOC_MAPPING loc_map = SOCKET_MAP; //default is socket mapping
     MainLoop mainLoop;
     PCM * m;
     accel_evt_parse_context evt_ctx;
@@ -626,6 +736,16 @@ int main(int argc, char * argv[])
         {
             accel = ACCEL_DSA;
         }
+#ifdef __linux__
+        else if (check_argument_equals(*argv, {"-qat", "/qat"}))
+        {
+            accel = ACCEL_QAT;
+        }
+        else if (check_argument_equals(*argv, {"-numa", "/numa"}))
+        {
+            loc_map = NUMA_MAP;
+        }
+#endif
         else if (extract_argument_value(*argv, {"-evt", "/evt"}, arg_value))
         {
             evtfile = true;
@@ -646,7 +766,7 @@ int main(int argc, char * argv[])
 
 #ifdef __linux__
     // check kernel version for driver dependency.
-    std::cout << "Info: IDX - Please ensure the required driver(idxd for iaa/dsa in linux) correct installed with this system, else the tool may fail to run." << endl;
+    std::cout << "Info: IDX - Please ensure the required driver(e.g idxd driver for iaa/dsa, qat driver and etc) correct enabled with this system, else the tool may fail to run.\n";
     struct utsname sys_info;
     if (!uname(&sys_info))
     {
@@ -665,7 +785,7 @@ int main(int argc, char * argv[])
             case ACCEL_DSA:
                 if ((krel_major_ver < 5) || (krel_major_ver == 5 && krel_minor_ver < 11))
                 {
-                    std::cout<< "Warning: IDX - current linux kernel version(" << krel_str << ") is too old, please upgrade it to the latest due to required idxd driver integrated to kernel since 5.11" << endl;
+                    std::cout<< "Warning: IDX - current linux kernel version(" << krel_str << ") is too old, please upgrade it to the latest due to required idxd driver integrated to kernel since 5.11.\n";
                 }
                 break;
             default:
@@ -680,8 +800,7 @@ int main(int argc, char * argv[])
     }
     catch (std::exception & e)
     {
-        std::cerr << "Error:" << e.what() << "\n";
-        std::cerr << "Please double check your platform!\n";
+        std::cerr << "Error: " << e.what() << "\n";
         exit(EXIT_FAILURE);
     }
 
@@ -699,7 +818,7 @@ int main(int argc, char * argv[])
     }
     else
     {
-        std::cerr << "The accelerator " << getAccelCounterName(accel) << " is NOT supported by this platform! Program aborted\n";
+        std::cerr << "Error: " << getAccelCounterName(accel) << " device is NOT available/ready with this platform! Program aborted\n";
         exit(EXIT_FAILURE);
     }
 
@@ -707,6 +826,7 @@ int main(int argc, char * argv[])
     {
         case ACCEL_IAA:
         case ACCEL_DSA:
+        case ACCEL_QAT:
             opcodeFieldMap["hname"] = PCM::H_EVENT_NAME;
             opcodeFieldMap["vname"] = PCM::V_EVENT_NAME;
             opcodeFieldMap["multiplier"] = PCM::MULTIPLIER;
@@ -727,7 +847,7 @@ int main(int argc, char * argv[])
             evt_ctx.ctrs.clear();//fill the ctrs by evt_handler callback func.
             break;
         default:
-            std::cerr << "Accel type=0x" << std::hex << accel << " is not supported! Program aborted\n";
+            std::cerr << "Error: Accel type=0x" << std::hex << accel << " is not supported! Program aborted\n";
             exit(EXIT_FAILURE);
             break;
     }
@@ -738,14 +858,14 @@ int main(int argc, char * argv[])
     }
     catch (std::exception & e)
     {
-        std::cerr << "Error info:" << e.what() << "\n";
-        std::cerr << "Event configure file have the problem and cause the program exit, please double check it!\n";
+        std::cerr << "Error: " << e.what() << "\n";
+        std::cerr << "Error: event cfg file content have the problem, please double check it! Program aborted\n";
         exit(EXIT_FAILURE);
     }
     
     if (evt_ctx.ctrs.size() ==0 || evt_ctx.ctrs.size() > getMaxNumOfAccelCtrs(m, evt_ctx.accel))
     {
-        std::cerr << "The ctr count have the problem(0 or exceed maximum), please check the event cfg file! Program aborted\n";
+        std::cerr << "Error: event counter size is 0 or exceed maximum, please check the event cfg file! Program aborted\n";
         exit(EXIT_FAILURE);
     }
 
@@ -757,12 +877,21 @@ int main(int argc, char * argv[])
         output = &file_stream;
     }
 
+    if (accel == ACCEL_QAT)
+    {
+        const uint32_t dev_count = getNumOfAccelDevs(m, accel);
+        for (uint32_t dev = 0; dev != dev_count; ++dev)
+        {
+            m->controlQATTelemetry(dev, PCM::QAT_TLM_START); //start the QAT telemetry service
+        }
+    }
+
     mainLoop([&]()
     {
         collect_data(m, delay, accel, evt_ctx.ctrs);
         std::vector<std::string> display_buffer = csv ?
-                    build_csv(getNumOfAccelDevs(m, accel), accel, evt_ctx.ctrs, human_readable, csv_delimiter, accel_results) :
-                    build_display(getNumOfAccelDevs(m, accel), accel, evt_ctx.ctrs, accel_results);
+                    build_csv(m, accel, evt_ctx.ctrs, human_readable, csv_delimiter, accel_results, loc_map) :
+                    build_display(m, accel, evt_ctx.ctrs, accel_results, loc_map);
         display(display_buffer, *output);
         return true;
     });

@@ -49,6 +49,21 @@ if(UNIX)  # APPLE, LINUX, FREE_BSD
 
     if(LINUX)
        set (PCM_COMMON_FLAGS "${PCM_COMMON_FLAGS} -Wextra -DPCM_USE_PERF")
+
+       if(NOT DEFINED LINUX_SYSTEMD)
+         set(LINUX_SYSTEMD FALSE)
+       endif()
+
+       if(NOT DEFINED LINUX_SYSTEMD_UNITDIR)
+           set(LINUX_SYSTEMD_UNITDIR /usr/lib/systemd/system)
+       endif()
+
+       if(LINUX_SYSTEMD)
+         message(STATUS "A systemd unit file will be generated")
+         message(STATUS "LINUX_SYSTEMD_UNITDIR:${LINUX_SYSTEMD_UNITDIR}")
+       else()
+         message(STATUS "Set LINUX_SYSTEMD=TRUE for a systemd unit file.")
+       endif()
     endif(LINUX)
 
     # adding the required PCM common flags
@@ -59,9 +74,14 @@ if(UNIX)  # APPLE, LINUX, FREE_BSD
     message(STATUS "CMAKE_C_FLAGS: ${CMAKE_C_FLAGS}")
 
     set(PCM_OPTIONAL_FLAGS "-Wall")
-    set(CMAKE_CXX_FLAGS_RELEASE "${PCM_OPTIONAL_FLAGS} -O3 -D_FORTIFY_SOURCE=1")
-    set(CMAKE_CXX_FLAGS_DEBUG "${PCM_OPTIONAL_FLAGS} -O0 -g")
-    set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "${PCM_OPTIONAL_FLAGS} -O3 -g -D_FORTIFY_SOURCE=1")
+    set(CMAKE_CXX_FLAGS_RELEASE "${PCM_OPTIONAL_FLAGS} -O3 -D_FORTIFY_SOURCE=1 -rdynamic")
+    set(CMAKE_CXX_FLAGS_DEBUG "${PCM_OPTIONAL_FLAGS} -O0 -g -rdynamic")
+    set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "${PCM_OPTIONAL_FLAGS} -O3 -g -D_FORTIFY_SOURCE=1 -rdynamic")
+    if(FREE_BSD)
+        set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -lexecinfo")
+        set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -lexecinfo")
+        set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "${CMAKE_CXX_FLAGS_RELWITHDEBINFO} -lexecinfo")
+    endif(FREE_BSD)
     set(CMAKE_C_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE}")
     set(CMAKE_C_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG}")
     set(CMAKE_C_FLAGS_RELWITHDEBINFO "${CMAKE_CXX_FLAGS_RELWITHDEBINFO}")

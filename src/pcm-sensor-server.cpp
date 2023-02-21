@@ -221,6 +221,7 @@ public:
 
     void ignoreSignal( int signum ) {
         struct sigaction sa;
+	sigemptyset(&sa.sa_mask);
         sa.sa_handler = SIG_IGN;
         sa.sa_flags = 0;
         sigaction( signum, &sa, 0 );
@@ -228,6 +229,7 @@ public:
 
     void installHandler( void (*handler)(int), int signum ) {
         struct sigaction sa;
+	sigemptyset(&sa.sa_mask);
         sa.sa_handler = handler;
         sa.sa_flags = 0;
         sigaction( signum, &sa, 0 );
@@ -797,13 +799,23 @@ public:
 
     void setSocket( int socketFD ) {
         socketFD_ = socketFD;
+        if( 0 != socketFD )  // avoid work with 0 socket after closure socket and set value to 0
+            return;
         // When receiving the socket descriptor, set the timeout
-        setsockopt( socketFD_, SOL_SOCKET, SO_RCVTIMEO, (char*)&timeout_, sizeof(struct timeval) );
+        const auto res = setsockopt( socketFD_, SOL_SOCKET, SO_RCVTIMEO, (char*)&timeout_, sizeof(struct timeval) );
+        if (res != 0)
+        {
+            std::cerr << "setsockopt failed while setting timeout value, " << strerror( errno ) << "\n";
+        }
     }
 
     void setTimeout( struct timeval t ) {
         timeout_ = t;
-        setsockopt( socketFD_, SOL_SOCKET, SO_RCVTIMEO, (char*)&timeout_, sizeof(struct timeval) );
+        const auto res = setsockopt( socketFD_, SOL_SOCKET, SO_RCVTIMEO, (char*)&timeout_, sizeof(struct timeval) );
+        if (res != 0)
+        {
+            std::cerr << "setsockopt failed while setting timeout value, " << strerror( errno ) << "\n";
+        }
     }
 
 #if defined (USE_SSL)
@@ -867,6 +879,8 @@ protected:
     }
 
     int sync() override {
+        if ( 0 == socketFD_ )  // Socket is closed already
+            return 0;
         int_type ret = writeToSocket();
         if ( traits_type::eof() == ret )
             return -1;
@@ -1043,7 +1057,7 @@ public:
 
     void close() {
         const auto s = socketBuffer_.socket();
-        if (s != -1) ::close(s);
+        if ( 0 != s ) ::close(s);
         socketBuffer_.setSocket( 0 );
     }
 
@@ -1848,7 +1862,7 @@ public:
         return hh;
     }
 
-    std::string headerName() { return name_; }
+    std::string headerName() const { return name_; }
     // Not sure what I needed it for but leaving it for now
 //     std::string headerValue() const {
 //         std::cout << "Calling headerValue for HeaderName: " << name_ << "\n";
@@ -1941,7 +1955,7 @@ private:
 private:
     std::string name_;
     std::string value_;
-    enum HeaderType type_;
+    enum HeaderType type_{HeaderType::Invalid};
     std::vector<std::string> valueList_;
     std::vector<double> floats_;
     std::vector<long long> integers_;
@@ -1973,7 +1987,7 @@ public:
         }
     }
 
-    void addHeader( HTTPHeader hh ) {
+    void addHeader( const HTTPHeader & hh ) {
         if ( headers_.insert( std::make_pair( hh.headerName(), hh ) ).second == false ) {
             throw std::runtime_error( "Header already exists in the headerlist" );
         }
@@ -3099,11 +3113,14 @@ void printHelpText( std::string const & programName ) {
     std::cout << "    -h|--help            : This information\n";
     std::cout << "    -silent              : Silence information output and print only measurements\n";
     std::cout << "    --version            : Print application version\n";
+    print_help_force_rtm_abort_mode(25, ":");
 }
 
 #if not defined( UNIT_TEST )
 /* Main */
-int main( int argc, char* argv[] ) {
+PCM_MAIN_NOTHROW;
+
+int mainThrows(int argc, char * argv[]) {
 
     if(print_version(argc, argv))
         exit(EXIT_SUCCESS);
@@ -3115,6 +3132,7 @@ int main( int argc, char* argv[] ) {
 #endif
     bool forcedProgramming = false;
     bool useRealtimePriority = false;
+    bool forceRTMAbortMode = false;
     unsigned short port = 0;
     unsigned short debug_level = 0;
     std::string certificateFile;
@@ -3175,6 +3193,10 @@ int main( int argc, char* argv[] ) {
             {
                 printHelpText( argv[0] );
                 exit(0);
+            }
+            else if (check_argument_equals( argv[i], { "-force-rtm-abort-mode" }))
+            {
+                forceRTMAbortMode = true;
             }
             else if ( check_argument_equals( argv[i], {"-silent", "/silent"} ) )
             {
@@ -3263,6 +3285,11 @@ int main( int argc, char* argv[] ) {
         // A HTTP interface to change the programming is planned
         PCM::ErrorCode status;
         PCM * pcmInstance = PCM::getInstance();
+        assert(pcmInstance);
+        if (forceRTMAbortMode)
+        {
+            pcmInstance->enableForceRTMAbortMode();
+        }
         do {
             status = pcmInstance->program();
             switch ( status ) {

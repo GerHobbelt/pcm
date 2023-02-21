@@ -50,7 +50,7 @@ public:
           "policy": "default",
           "query": "SELECT )PCMDELIMITER";
         result += metric;
-        result += R"PCMDELIMITER( FROM \"http\" WHERE $timeFilter GROUP BY time($__interval) fill(null)",
+        result += R"PCMDELIMITER( FROM \"http\" WHERE (\"url\" = '$node') AND $timeFilter GROUP BY time($__interval) fill(null)",
           "rawQuery": true,
           "refId": ")PCMDELIMITER";
         result += refId;
@@ -366,10 +366,11 @@ public:
 class Dashboard
 {
     std::string title;
+    PCMDashboardType type;
     std::vector<std::shared_ptr<Panel>> panels;
     Dashboard() = delete;
 public:
-    Dashboard(const std::string & title_) : title(title_) {}
+    Dashboard(const std::string & title_,PCMDashboardType type_) : title(title_), type(type_) {}
     void push(const std::shared_ptr<Panel> & p)
     {
         panels.push_back(p);
@@ -377,6 +378,15 @@ public:
     std::string operator () () const
     {
         std::string result;
+        std::string definition,query;
+        if(type==InfluxDB){
+          definition = "\"SHOW TAG VALUES WITH KEY = \\\"url\\\"\"";
+          query = "\"SHOW TAG VALUES WITH KEY = \\\"url\\\"\"";
+        }
+        else{
+          definition = "\"label_values(Number_of_sockets,instance)\"";
+          query = "{\"query\": \"label_values(Number_of_sockets,instance)\",\"refId\": \"StandardVariableQuery\"}"; 
+        }
         result += R"PCMDELIMITER({
   "annotations": {
     "list": [
@@ -421,17 +431,18 @@ public:
           "value": "ip addr:port"
         },
         "datasource": null,
-        "definition": "label_values(Number_of_sockets,instance)",
+        "definition": )PCMDELIMITER"; 
+        result +=definition;
+        result += R"PCMDELIMITER(,
         "hide": 0,
         "includeAll": false,
         "label": "Host",
         "multi": false,
         "name": "node",
         "options": [],
-        "query": {
-          "query": "label_values(Number_of_sockets,instance)",
-          "refId": "StandardVariableQuery"
-        },
+        "query":)PCMDELIMITER";
+         result+=query;
+         result += R"PCMDELIMITER(,
         "refresh": 1,
         "regex": "",
         "skipUrlSync": false,
@@ -536,9 +547,9 @@ std::string getPCMDashboardJSON(const PCMDashboardType type, int ns, int nu, int
     const size_t NumUPILinksPerSocket = (nu < 0) ? pcm->getQPILinksPerSocket() : nu;
     const size_t maxCState = (nc < 0) ? PCM::MAX_C_STATE : nc;
 
-    const int height = 5;
-    const int width = 15;
-    const int max_width = 24;
+    constexpr int height = 5;
+    constexpr int width = 15;
+    constexpr int max_width = 24;
     int y = 0;
 
     if (type == Prometheus_Default)
@@ -557,7 +568,7 @@ std::string getPCMDashboardJSON(const PCMDashboardType type, int ns, int nu, int
     {
         hostname = buffer;
     }
-    Dashboard dashboard("Intel(r) Performance Counter Monitor (Intel(r) PCM) Dashboard - " + hostname);
+    Dashboard dashboard("Intel(r) Performance Counter Monitor (Intel(r) PCM) Dashboard - " + hostname,type);
     auto createTarget = [type](const std::string& title, const std::string& inluxdbMetric, const std::string& prometheusExpr) -> std::shared_ptr<Target>
     {
         std::shared_ptr<Target> t;
@@ -612,9 +623,41 @@ std::string getPCMDashboardJSON(const PCMDashboardType type, int ns, int nu, int
             panel->push(t);
             panel1->push(t);
         }
+        for (std::string m : { "DRAM ", "Persistent Memory " })
+        {
+            auto t = createTarget(m + "Total",
+            "(" + influxDBUncore_Uncore_Counters(S, m + "Writes") + "+" + influxDBUncore_Uncore_Counters(S, m + "Reads") + ")/1048576",
+            "(" + prometheusCounters(S, m + "Writes", false) + "+" + prometheusCounters(S, m + "Reads", false) + ")/1048576");
+            panel->push(t);
+            panel1->push(t);
+        }
         dashboard.push(panel);
         dashboard.push(panel1);
     }
+
+    auto panel = std::make_shared<GraphPanel>(0, y, width, height, "PMEM/DRAM Bandwidth Ratio", "PMEM/DRAM", false);
+    auto panel1 = std::make_shared<BarGaugePanel>(width, y, max_width - width, height, "PMEM/DRAM Bandwidth Ratio");
+    y += height;
+    for (size_t s = 0; s < NumSockets; ++s)
+    {
+        const auto S = std::to_string(s);
+        auto t = createTarget("Socket" + S,
+            "(" + influxDBUncore_Uncore_Counters(S, "Persistent Memory Writes") +
+            "+" + influxDBUncore_Uncore_Counters(S, "Persistent Memory Reads") +
+            ")/" +
+            "(" + influxDBUncore_Uncore_Counters(S, "DRAM Writes") +
+            "+" + influxDBUncore_Uncore_Counters(S, "DRAM Reads") + ")",
+            "(" + prometheusCounters(S, "Persistent Memory Writes", false) +
+            "+" + prometheusCounters(S, "Persistent Memory Reads", false) +
+            ")/" +
+            "(" + prometheusCounters(S, "DRAM Writes", false) +
+            "+" + prometheusCounters(S, "DRAM Reads", false) +")");
+        panel->push(t);
+        panel1->push(t);
+    }
+    dashboard.push(panel);
+    dashboard.push(panel1);
+
     auto upi = [&](const std::string & m, const bool utilization)
     {
         for (size_t s = 0; s < NumSockets; ++s)
@@ -632,7 +675,7 @@ std::string getPCMDashboardJSON(const PCMDashboardType type, int ns, int nu, int
             {
                 const auto L = std::to_string(l);
                 auto t = createTarget(pcm->xPI() + std::to_string(l),
-                    "mean(\\\"" + std::string(pcm->xPI()) + " Links_QPI Counters Socket " + S + "_" + m + " On Link " + L + "\\\")" +  suffix,
+                    "mean(\\\"QPI/UPI Links_QPI Counters Socket " + S + "_" + m + " On Link " + L + "\\\")" +  suffix,
                     "rate(" + prometheusMetric(m) + "_On_Link_" + L + prometheusSystem(S) + interval + ")" + suffix);
                 panel->push(t);
                 panel1->push(t);

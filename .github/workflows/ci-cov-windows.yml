@@ -1,4 +1,4 @@
-name: kw-windows
+name: coverity-windows
 
 on:
   push:
@@ -20,14 +20,21 @@ jobs:
     - name: Add MSBuild to PATH
       uses: microsoft/setup-msbuild@v1.1.3
     
-    - name: kw
+    - name: coverity-windows
       run: |
         mkdir build
         cd build
         cmake ..
-        c:\pcm\ci-kw-windows.ps1 'echo No_preparation' 'cmake --build . -j'
+        c:\pcm\ci-cov-windows.ps1
 
-    - name: kw-msr-driver
+    - name: coverity-windows-cs
+      run: |
+        mkdir build-cs
+        cd build-cs
+        cmake ..
+        c:\pcm\ci-cov-windows-cs.ps1
+
+    - name: coverity-windows-msr
       run: |
         chdir ${{github.workspace}}\src\WinMSRDriver
-        c:\pcm\ci-kw-windows.ps1 'echo No_preparation_for_msbuild' 'msbuild MSR.vcxproj /p:Configuration=Release,Platform=x64 /t:Clean,Build /m'
+        c:\pcm\ci-cov-windows-msr.ps1
