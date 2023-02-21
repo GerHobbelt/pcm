@@ -1,3 +1,10 @@
+pcm (202302-1) unstable; urgency=medium
+
+  * New upstream release.
+  * No packaging updates to ease running the daemon/grafana/etc yet.
+
+ -- Adam Borowski <kilobyte@angband.pl>  Tue, 21 Feb 2023 16:01:47 +0100
+
 pcm (202212-1) unstable; urgency=medium
 
   * New upstream release.
