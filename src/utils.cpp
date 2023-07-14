@@ -32,7 +32,7 @@ void exit_cleanup(void)
     restore_signal_handlers();
 
     // this replaces same call in cleanup() from util.h
-    PCM::getInstance()->cleanup(); // this replaces same call in cleanup() from util.h
+    if (PCM::isInitialized()) PCM::getInstance()->cleanup(); // this replaces same call in cleanup() from util.h
 
 //TODO: delete other shared objects.... if any.
 
@@ -50,7 +50,7 @@ void print_cpu_details()
     const auto ucode_level = m->getCPUMicrocodeLevel();
     if (ucode_level >= 0)
     {
-        std::cerr << " microcode level 0x" << std::hex << ucode_level;
+        std::cerr << " microcode level 0x" << std::hex << ucode_level << std::dec;
     }
     std::cerr << "\n";
 }
@@ -141,7 +141,7 @@ BOOL sigINT_handler(DWORD fdwCtrlType)
 
     // in case PCM is blocked just return and summary will be dumped in
     // calling function, if needed
-    if (PCM::getInstance()->isBlocked()) {
+    if (PCM::isInitialized() && PCM::getInstance()->isBlocked()) {
         return FALSE;
     } else {
         exit_cleanup();
@@ -177,7 +177,7 @@ void sigINT_handler(int signum)
 
     // in case PCM is blocked just return and summary will be dumped in
     // calling function, if needed
-    if (PCM::getInstance()->isBlocked()) {
+    if (PCM::isInitialized() && PCM::getInstance()->isBlocked()) {
         return;
     } else {
         exit_cleanup();
@@ -525,13 +525,13 @@ void MySystem(char * sysCmd, char ** sysArgv)
         if (PCM::getInstance()->isBlocked()) {
             int res;
             waitpid(child_pid, &res, 0);
-            std::cerr << "Program " << sysCmd << " launched with PID: " << child_pid << "\n";
+            std::cerr << "Program " << sysCmd << " launched with PID: " << std::dec << child_pid << "\n";
 
             if (WIFEXITED(res)) {
                 std::cerr << "Program exited with status " << WEXITSTATUS(res) << "\n";
             }
             else if (WIFSIGNALED(res)) {
-                std::cerr << "Process " << child_pid << " was terminated with status " << WTERMSIG(res);
+                std::cerr << "Process " << child_pid << " was terminated with status " << WTERMSIG(res) << "\n";
             }
         }
     }
@@ -950,7 +950,7 @@ int load_events(const std::string &fn, std::map<std::string, uint32_t> &ofm,
         if (!in.is_open())
         {
             in.close();
-            const auto err_msg = std::string("event file ") + fn + " or " + alt_fn + " is not available. Copy it from PCM build directory.";
+            const auto err_msg = std::string("event config file ") + fn + " or " + alt_fn + " is not available, you can try to manually copy it from PCM source package.";
             throw std::invalid_argument(err_msg);
         }
     }
@@ -958,7 +958,7 @@ int load_events(const std::string &fn, std::map<std::string, uint32_t> &ofm,
     while (std::getline(in, line))
     {
         //TODO: substring until #, if len == 0, skip, else parse normally
-        //Set default value if the item is NOT availalbe in cfg file.
+        //Set default value if the item is NOT available in cfg file.
         ctr.h_event_name = "INVALID";
         ctr.v_event_name = "INVALID";
         ctr.ccr = 0;
@@ -1085,7 +1085,7 @@ bool get_cpu_bus(uint32 msmDomain, uint32 msmBus, uint32 msmDev, uint32 msmFunc,
     uint32 sadControlCfg = 0x0;
     uint32 busNo = 0x0;
 
-    //std::cout << "get_cpu_bus: d=" << std::hex << msmDomain << ",b=" << msmBus << ",d=" << msmDev << ",f=" << msmFunc <<" \n";
+    //std::cout << "get_cpu_bus: d=" << std::hex << msmDomain << ",b=" << msmBus << ",d=" << msmDev << ",f=" << msmFunc << std::dec << " \n";
     PciHandleType h(msmDomain, msmBus, msmDev, msmFunc);
 
     h.read32(SPR_MSM_REG_CPUBUSNO_VALID_OFFSET, &cpuBusValid);
@@ -1111,7 +1111,7 @@ bool get_cpu_bus(uint32 msmDomain, uint32 msmBus, uint32 msmDev, uint32 msmFunc,
             return false;
         }
         cpuBusNo.push_back(busNo);
-        //std::cout << std::hex << "get_cpu_bus: busNo=0x" << busNo << "\n";
+        //std::cout << std::hex << "get_cpu_bus: busNo=0x" << busNo << std::dec <<  "\n";
     }
 
     cpuBusNo0 = cpuBusNo[0] & 0xff;

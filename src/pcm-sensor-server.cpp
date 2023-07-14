@@ -439,6 +439,9 @@ private:
         uint32 links   = pcm->getQPILinksPerSocket();
         for ( uint32 i=0; i < sockets; ++i ) {
             startObject( std::string( "QPI Counters Socket " ) + std::to_string( i ), BEGIN_OBJECT );
+            printCounter( std::string( "CXL Write Cache" ), getCXLWriteCacheBytes   (i,  before, after ) );
+            printCounter( std::string( "CXL Write Mem"   ), getCXLWriteMemBytes     (i,  before, after ) );
+
             for ( uint32 j=0; j < links; ++j ) {
                 printCounter( std::string( "Incoming Data Traffic On Link " ) + std::to_string( j ), getIncomingQPILinkBytes      ( i, j, before, after ) );
                 printCounter( std::string( "Outgoing Data And Non-Data Traffic On Link " ) + std::to_string( j ), getOutgoingQPILinkBytes      ( i, j, before, after ) );
@@ -690,6 +693,8 @@ private:
         uint32 links   = pcm->getQPILinksPerSocket();
         for ( uint32 i=0; i < sockets; ++i ) {
             addToHierarchy( std::string( "socket=\"" ) + std::to_string( i ) + "\"" );
+            printCounter( std::string( "CXL Write Cache" ), getCXLWriteCacheBytes   (i,  before, after ) );
+            printCounter( std::string( "CXL Write Mem"   ), getCXLWriteMemBytes     (i,  before, after ) );
             for ( uint32 j=0; j < links; ++j ) {
                 printCounter( std::string( "Incoming Data Traffic On Link " ) + std::to_string( j ),                          getIncomingQPILinkBytes      ( i, j, before, after ) );
                 printCounter( std::string( "Outgoing Data And Non-Data Traffic On Link " ) + std::to_string( j ),             getOutgoingQPILinkBytes      ( i, j, before, after ) );
@@ -799,7 +804,7 @@ public:
 
     void setSocket( int socketFD ) {
         socketFD_ = socketFD;
-        if( 0 != socketFD )  // avoid work with 0 socket after closure socket and set value to 0
+        if( 0 == socketFD )  // avoid work with 0 socket after closure socket and set value to 0
             return;
         // When receiving the socket descriptor, set the timeout
         const auto res = setsockopt( socketFD_, SOL_SOCKET, SO_RCVTIMEO, (char*)&timeout_, sizeof(struct timeval) );
@@ -982,7 +987,13 @@ public:
 #else
     basic_socketstream( int socketFD ) : stream_type( &socketBuffer_ ) {
 #endif
+        DBG( 3,"socketFD = ", socketFD );
+        if ( 0 == socketFD ) {
+            DBG( 3,"Trying to set socketFD to 0 which is not allowed!" );
+            throw std::runtime_error( "Trying to set socketFD to 0 on basic_socketstream level which is not allowed." );
+        }
         socketBuffer_.setSocket( socketFD );
+
 #if defined (USE_SSL)
         if ( nullptr != ssl )
             socketBuffer_.setSSL( ssl );
@@ -1547,7 +1558,7 @@ public:
         } else {
             // If first character is not a / then the first colon is end of scheme
             size_t schemeColonPos = fullURL.find( ':' );
-            if ( std::string::npos != schemeColonPos ) {
+            if ( std::string::npos != schemeColonPos && 0 != schemeColonPos ) {
                 std::string scheme;
                 scheme = fullURL.substr( 0, schemeColonPos );
                 std::string validSchemeChars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+-.";
@@ -1596,11 +1607,16 @@ public:
                     DBG( 3, "3 userEndPos '", userEndPos, "'" );
                     std::string user = authority.substr( 0, userEndPos );
                     DBG( 3, "user: '", user, "'" );
-                    // user is possibly percent encoded FIXME
-                    url.user_ = url.percentDecode( user );
-                    url.hasUser_ = true;
-                    // delete user/pass including the at
-                    authority.erase( 0, atPos+1 );
+                    if ( !user.empty() ) {
+                        // user is possibly percent encoded FIXME
+                        url.user_ = url.percentDecode( user );
+                        url.hasUser_ = true;
+                        // delete user/pass including the at
+                        authority.erase( 0, atPos+1 );
+                    }
+                    else {
+                        throw std::runtime_error( "User not found before @ sign" );
+                    }
                 }
 
                 // Instead of all the logic it is easier to work on substrings
@@ -1664,37 +1680,50 @@ public:
                     }
                 } else if ( !url.hasHost_ )
                     throw std::runtime_error( "No hostname found" );
+            } else {
+                throw std::runtime_error( "// not found" );
             }
         }
 
         pathEndPos = std::min( {questionMarkPos, numberPos} );
-        url.path_ = fullURL.substr( pathBeginPos, pathEndPos - pathBeginPos );
+        if ( std::string::npos != pathBeginPos ) {
+            url.path_ = fullURL.substr( pathBeginPos, pathEndPos - pathBeginPos );
+        } else {
+            url.path_ = "";
+        }
         DBG( 3, "path: '", url.path_, "'" );
 
         if ( std::string::npos != questionMarkPos ) {
-            url.hasQuery_ = true;
-	    // Why am i not checking numberPos for validity?
+            // Why am i not checking numberPos for validity?
             std::string queryString = fullURL.substr( questionMarkPos+1, numberPos-(questionMarkPos+1) );
             DBG( 3, "queryString: '", queryString, "'" );
-            size_t ampPos = 0;
-            while ( !queryString.empty() ) {
-                ampPos = queryString.find( '&' );
-                std::string query = queryString.substr( 0, ampPos );
-                DBG( 3, "query: '", query, "'" );
-                size_t equalsPos = query.find( '=' );
-                if ( std::string::npos == equalsPos )
-                    throw std::runtime_error( "Did not find a '=' in the query" );
-                std::string one, two;
-                one = url.percentDecode( query.substr( 0, equalsPos ) );
-                DBG( 3, "one: '", one, "'" );
-                two = url.percentDecode( query.substr( equalsPos+1 ) );
-                DBG( 3, "two: '", two, "'" );
-                url.arguments_.push_back( std::make_pair( one ,two ) );
-                // npos + 1 == 0... ouch
-                if ( std::string::npos == ampPos )
-                    queryString.erase( 0, ampPos );
-                else
-                    queryString.erase( 0, ampPos+1 );
+
+            if ( queryString.empty() ) {
+                url.hasQuery_ = false;
+                throw std::runtime_error( "Invalid URL: query not found after question mark" );
+            }
+            else {
+                url.hasQuery_ = true;
+                size_t ampPos = 0;
+                while ( !queryString.empty() ) {
+                    ampPos = queryString.find( '&' );
+                    std::string query = queryString.substr( 0, ampPos );
+                    DBG( 3, "query: '", query, "'" );
+                    size_t equalsPos = query.find( '=' );
+                    if ( std::string::npos == equalsPos )
+                        throw std::runtime_error( "Did not find a '=' in the query" );
+                    std::string one, two;
+                    one = url.percentDecode( query.substr( 0, equalsPos ) );
+                    DBG( 3, "one: '", one, "'" );
+                    two = url.percentDecode( query.substr( equalsPos+1 ) );
+                    DBG( 3, "two: '", two, "'" );
+                    url.arguments_.push_back( std::make_pair( one ,two ) );
+                    // npos + 1 == 0... ouch
+                    if ( std::string::npos == ampPos )
+                        queryString.erase( 0, ampPos );
+                    else
+                        queryString.erase( 0, ampPos+1 );
+                }
             }
         }
 
@@ -2239,13 +2268,14 @@ private:
     };
 };
 
+// Compress linear white space and remove carriage return, not new line, this one is gone already
 std::string& compressLWSAndRemoveCR( std::string& line ) {
     std::string::size_type pos = 0, end = line.size(), start = 0;
 
     for ( pos = 0; pos < end; ++pos ) {
         start = pos;
         if ( ::isspace( line[pos] ) ) {
-            while ( pos < line.size() && ::isspace( line[++pos] ) ) {
+            while ( (pos+1) < line.size() && ::isspace( line[++pos] ) ) {
             }
             if ( (pos - start) > 1 ) {
                 line.erase( start+1,  pos-start-1 );
@@ -3292,6 +3322,7 @@ int mainThrows(int argc, char * argv[]) {
         }
         do {
             status = pcmInstance->program();
+
             switch ( status ) {
                 case PCM::PMUBusy:
                 {
@@ -3322,6 +3353,9 @@ int mainThrows(int argc, char * argv[]) {
         } else {
             DBG( 1, "Programmed Partial Writes instead of PMEM R/W BW" );
         }
+
+        //TODO: check return value when its implemented  
+        pcmInstance->programCXLCM();
 
 #if defined (USE_SSL)
         if ( useSSL ) {

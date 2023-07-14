@@ -246,8 +246,8 @@ class UncorePMU
     uint32 getCPUModel();
     HWRegisterPtr unitControl;
 public:
-    HWRegisterPtr counterControl[4];
-    HWRegisterPtr counterValue[4];
+    std::vector<HWRegisterPtr> counterControl;
+    std::vector<HWRegisterPtr> counterValue;
     HWRegisterPtr fixedCounterControl;
     HWRegisterPtr fixedCounterValue;
     HWRegisterPtr filter[2];
@@ -266,7 +266,16 @@ public:
         const HWRegisterPtr& filter0 = HWRegisterPtr(),
         const HWRegisterPtr& filter1 = HWRegisterPtr()
     );
+    UncorePMU(const HWRegisterPtr& unitControl_,
+        const std::vector<HWRegisterPtr> & counterControl_,
+        const std::vector<HWRegisterPtr> & counterValue_,
+        const HWRegisterPtr& fixedCounterControl_ = HWRegisterPtr(),
+        const HWRegisterPtr& fixedCounterValue_ = HWRegisterPtr(),
+        const HWRegisterPtr& filter0 = HWRegisterPtr(),
+        const HWRegisterPtr& filter1 = HWRegisterPtr()
+    );
     UncorePMU() : cpu_model_(0U) {}
+    size_t size() const { return counterControl.size(); }
     virtual ~UncorePMU() {}
     bool valid() const
     {
@@ -340,7 +349,7 @@ enum ServerUncoreMemoryMetrics
 };
 
 //! Object to access uncore counters in a socket/processor with microarchitecture codename SandyBridge-EP (Jaketown) or Ivytown-EP or Ivytown-EX
-class ServerPCICFGUncore
+class ServerUncorePMUs
 {
     friend class PCM;
     int32 iMCbus,UPIbus,M2Mbus;
@@ -369,9 +378,9 @@ class ServerPCICFGUncore
     static std::vector<std::pair<uint32, uint32> > socket2UPIbus;
     static std::vector<std::pair<uint32, uint32> > socket2M2Mbus;
 
-    ServerPCICFGUncore();                                         // forbidden
-    ServerPCICFGUncore(ServerPCICFGUncore &);                     // forbidden
-    ServerPCICFGUncore & operator = (const ServerPCICFGUncore &); // forbidden
+    ServerUncorePMUs();                                         // forbidden
+    ServerUncorePMUs(ServerUncorePMUs &);                     // forbidden
+    ServerUncorePMUs & operator = (const ServerUncorePMUs &); // forbidden
     static PciHandleType * createIntelPerfMonDevice(uint32 groupnr, int32 bus, uint32 dev, uint32 func, bool checkVendor = false);
     void programIMC(const uint32 * MCCntConfig);
     void programEDC(const uint32 * EDCCntConfig);
@@ -413,7 +422,7 @@ public:
     //! \brief Initialize access data structures
     //! \param socket_ socket id
     //! \param pcm pointer to PCM instance
-    ServerPCICFGUncore(uint32 socket_, const PCM * pcm);
+    ServerUncorePMUs(uint32 socket_, const PCM * pcm);
     //! \brief Program performance counters (disables programming power counters)
     void program();
     //! \brief Get the number of integrated controller reads (in cache lines)
@@ -450,7 +459,7 @@ public:
     //! \param port QPI port id
     uint64 getOutgoingFlits(uint32 port);
 
-    ~ServerPCICFGUncore();
+    ~ServerUncorePMUs();
 
     //! \brief Program power counters (disables programming performance counters)
     //! \param mc_profile memory controller measurement profile. See description of profiles in pcm-power.cpp
@@ -575,7 +584,7 @@ class PCM_API PCM
     friend class ServerUncore;
     friend class PerfVirtualControlRegister;
     friend class Aggregator;
-    friend class ServerPCICFGUncore;
+    friend class ServerUncorePMUs;
     PCM();     // forbidden to call directly because it is a singleton
     PCM(const PCM &) = delete;
     PCM & operator = (const PCM &) = delete;
@@ -619,7 +628,7 @@ class PCM_API PCM
     static PCM * instance;
     bool programmed_core_pmu{false};
     std::vector<std::shared_ptr<SafeMsrHandle> > MSR;
-    std::vector<std::shared_ptr<ServerPCICFGUncore> > server_pcicfg_uncore;
+    std::vector<std::shared_ptr<ServerUncorePMUs> > serverUncorePMUs;
     std::vector<UncorePMU> pcuPMUs;
     std::vector<std::map<int32, UncorePMU> > iioPMUs;
     std::vector<std::map<int32, UncorePMU> > irpPMUs;
@@ -631,6 +640,7 @@ class PCM_API PCM
     std::vector<std::shared_ptr<CounterWidthExtender> > dram_energy_status;
     std::vector<std::vector<UncorePMU> > cboPMUs;
     std::vector<std::vector<UncorePMU> > mdfPMUs;
+    std::vector<std::vector<std::pair<UncorePMU, UncorePMU>>> cxlPMUs; // socket X CXL ports X UNIT {0,1}
 
     std::vector<std::shared_ptr<CounterWidthExtender> > memory_bw_local;
     std::vector<std::shared_ptr<CounterWidthExtender> > memory_bw_total;
@@ -820,6 +830,12 @@ public:
         QAT_TLM_MAX
     };
 
+    enum IDX_STATE
+    {
+        IDX_STATE_OFF = 0,
+        IDX_STATE_ON,
+    };
+
     struct SimplePCIeDevInfo
     {
         enum PCIeWidthMode width;
@@ -876,10 +892,13 @@ public:
         int divider[4]; //We usually like to have some kind of divider (i.e. /10e6 )
     };
 
-    enum MSREventPosition
+    struct MSREventPosition
     {
-        index = 0,
-        type = 1
+        enum constants
+        {
+            index = 0,
+            type = 1
+        };
     };
     enum MSRType
     {
@@ -987,13 +1006,19 @@ private:
     void readAndAggregatePackageCStateResidencies(std::shared_ptr<SafeMsrHandle> msr, CounterStateType & result);
 public:
     struct RawPMUConfig;
+    void programCXLCM();
+    template <class CounterStateType>
+    void readAndAggregateCXLCMCounters(CounterStateType & counterState);
+
 private:
     template <class CounterStateType>
     void readMSRs(std::shared_ptr<SafeMsrHandle> msr, const RawPMUConfig & msrConfig, CounterStateType & result);
     void readQPICounters(SystemCounterState & counterState);
+    void readPCICFGRegisters(SystemCounterState& result);
     void reportQPISpeed() const;
     void readCoreCounterConfig(const bool complainAboutMSR = false);
     void readCPUMicrocodeLevel();
+    void globalFreezeUncoreCountersInternal(const unsigned long long int freeze);
 
     uint64 CX_MSR_PMON_CTRY(uint32 Cbo, uint32 Ctr) const;
     uint64 CX_MSR_PMON_BOX_FILTER(uint32 Cbo) const;
@@ -1011,7 +1036,7 @@ private:
         if (!eventsBegin) return;
         Iterator curEvent = eventsBegin;
         const auto cpu_model = PCM::getInstance()->getCPUModel();
-        for (int c = 0; curEvent != eventsEnd; ++c, ++curEvent)
+        for (int c = 0; curEvent != eventsEnd && size_t(c) < pmu.size(); ++c, ++curEvent)
         {
             auto ctrl = pmu.counterControl[c];
             if (ctrl.get() != nullptr)
@@ -1034,7 +1059,8 @@ private:
     }
     void programPCU(uint32 * events, const uint64 filter);
     void programUBOX(const uint64* events);
-
+    void programCXLDP(const uint64* events);
+    void programCXLCM(const uint64* events);
     void cleanupUncorePMUs(const bool silent = false);
 
     bool isCLX() const // Cascade Lake-SP
@@ -1057,6 +1083,8 @@ private:
     bool isRDTDisabled() const;
 
 public:
+    static bool isInitialized() { return instance != nullptr; }
+
     //! check if TMA level 1 metrics are supported
     bool isHWTMAL1Supported() const;
 
@@ -1065,7 +1093,9 @@ public:
         TOR_OCCUPANCY = 0,
         TOR_INSERTS = 1,
         REQUESTS_ALL = 2,
-        REQUESTS_LOCAL = 3
+        REQUESTS_LOCAL = 3,
+        CXL_TxC_MEM = 0,   // works only on counters 0-3
+        CXL_TxC_CACHE = 1  // works only on counters 0-3
     };
     //! check if in secure boot mode
     bool isSecureBoot() const;
@@ -1150,6 +1180,9 @@ public:
 
     //! \brief Returns the socketid of IDX accel dev
     uint32 getCPUSocketIdOfIDXAccelDev(uint32 accel, uint32 dev) const;
+
+    //! \brief Returns the platform support IDX accel dev or NOT
+    bool supportIDXAccelDev() const;
 
     /*!
             \brief Returns PCM object
@@ -1244,7 +1277,8 @@ public:
     // vector of IDs. E.g. for core {raw event} or {raw event, offcore response1 msr value, } or {raw event, offcore response1 msr value, offcore response2}
     // or for cha/cbo {raw event, filter value}, etc
     // + user-supplied name
-    typedef std::pair<std::array<uint64, 5>, std::string> RawEventConfig;
+    typedef std::array<uint64, 6> RawEventEncoding;
+    typedef std::pair<RawEventEncoding, std::string> RawEventConfig;
     struct RawPMUConfig
     {
         std::vector<RawEventConfig> programmable;
@@ -1258,6 +1292,40 @@ public:
     };
     typedef std::map<std::string, RawPMUConfig> RawPMUConfigs;
     ErrorCode program(const RawPMUConfigs& curPMUConfigs, const bool silent = false, const int pid = -1);
+
+    struct PCICFGEventPosition
+    {
+        enum constants
+        {
+            deviceID = 0,
+            offset = 1,
+            type = 2,
+            width = 5
+        };
+    };
+    typedef std::pair<std::shared_ptr<PciHandleType>, uint32> PCICFGRegisterEncoding; // PciHandleType shared ptr, offset
+    struct PCICFGRegisterEncodingHash
+    {
+        std::size_t operator()(const RawEventEncoding & e) const
+        {
+            std::size_t h1 = std::hash<uint64>{}(e[PCICFGEventPosition::deviceID]);
+            std::size_t h2 = std::hash<uint64>{}(e[PCICFGEventPosition::offset]);
+            std::size_t h3 = std::hash<uint64>{}(e[PCICFGEventPosition::width]);
+            return h1 ^ (h2 << 1ULL) ^ (h3 << 2ULL);
+        }
+    };
+    struct PCICFGRegisterEncodingCmp
+    {
+        bool operator ()(const RawEventEncoding& a, const RawEventEncoding& b) const
+        {
+            return a[PCICFGEventPosition::deviceID] == b[PCICFGEventPosition::deviceID]
+                && a[PCICFGEventPosition::offset] == b[PCICFGEventPosition::offset]
+                && a[PCICFGEventPosition::width] == b[PCICFGEventPosition::width];
+        }
+    };
+private:
+    std::unordered_map<RawEventEncoding, std::vector<PCICFGRegisterEncoding>, PCICFGRegisterEncodingHash, PCICFGRegisterEncodingCmp> PCICFGRegisterLocations{};
+public:
 
     TopologyEntry::CoreType getCoreType(const unsigned coreID) const
     {
@@ -1301,10 +1369,16 @@ public:
        return std::make_pair(0U, 0U);
     }
 
-    //! \brief Freezes uncore event counting (works only on microarchitecture codename SandyBridge-EP and IvyTown)
+    //! \brief Freezes uncore event counting using global control MSR
+    void globalFreezeUncoreCounters();
+
+    //! \brief Unfreezes uncore event counting using global control MSR
+    void globalUnfreezeUncoreCounters();
+
+    //! \brief Freezes uncore event counting
     void freezeServerUncoreCounters();
 
-    //! \brief Unfreezes uncore event counting (works only on microarchitecture codename SandyBridge-EP and IvyTown)
+    //! \brief Unfreezes uncore event counting
     void unfreezeServerUncoreCounters();
 
     /*! \brief Reads the power/energy counter state of a socket (works only on microarchitecture codename SandyBridge-EP)
@@ -1515,7 +1589,7 @@ private:
         }
         return false;
     }
-    RawPMUConfig threadMSRConfig{}, packageMSRConfig{};
+    RawPMUConfig threadMSRConfig{}, packageMSRConfig{}, pcicfgConfig{};
 public:
 
     //! \brief Reads CPU model id
@@ -1546,6 +1620,16 @@ public:
     //! \return socket identifier
     int32 getSocketId(uint32 core_id) const { return (int32)topology[core_id].socket; }
 
+
+    size_t getNumCXLPorts(uint32 socket) const
+    {
+        if (socket < cxlPMUs.size())
+        {
+            return cxlPMUs[socket].size();
+        }
+        return 0;
+    }
+
     //! \brief Returns the number of Intel(r) Quick Path Interconnect(tm) links per socket
     //! \return number of QPI links per socket
     uint64 getQPILinksPerSocket() const
@@ -1570,7 +1654,7 @@ public:
         case SKX:
         case ICX:
         case SPR:
-            return (server_pcicfg_uncore.size() && server_pcicfg_uncore[0].get()) ? (server_pcicfg_uncore[0]->getNumQPIPorts()) : 0;
+            return (serverUncorePMUs.size() && serverUncorePMUs[0].get()) ? (serverUncorePMUs[0]->getNumQPIPorts()) : 0;
         }
         return 0;
     }
@@ -1596,7 +1680,7 @@ public:
         case SPR:
         case BDX:
         case KNL:
-            return (server_pcicfg_uncore.size() && server_pcicfg_uncore[0].get()) ? (server_pcicfg_uncore[0]->getNumMC()) : 0;
+            return (serverUncorePMUs.size() && serverUncorePMUs[0].get()) ? (serverUncorePMUs[0]->getNumMC()) : 0;
         }
         return 0;
     }
@@ -1623,7 +1707,7 @@ public:
         case BDX:
         case KNL:
         case SNOWRIDGE:
-            return (server_pcicfg_uncore.size() && server_pcicfg_uncore[0].get()) ? (server_pcicfg_uncore[0]->getNumMCChannels()) : 0;
+            return (serverUncorePMUs.size() && serverUncorePMUs[0].get()) ? (serverUncorePMUs[0]->getNumMCChannels()) : 0;
         }
         return 0;
     }
@@ -1652,7 +1736,7 @@ public:
         case BDX:
         case KNL:
         case SNOWRIDGE:
-            return (socket < server_pcicfg_uncore.size() && server_pcicfg_uncore[socket].get()) ? (server_pcicfg_uncore[socket]->getNumMCChannels(controller)) : 0;
+            return (socket < serverUncorePMUs.size() && serverUncorePMUs[socket].get()) ? (serverUncorePMUs[socket]->getNumMCChannels(controller)) : 0;
         }
         return 0;
     }
@@ -1664,7 +1748,7 @@ public:
         switch (cpu_model)
         {
         case KNL:
-            return (server_pcicfg_uncore.size() && server_pcicfg_uncore[0].get()) ? (server_pcicfg_uncore[0]->getNumEDCChannels()) : 0;
+            return (serverUncorePMUs.size() && serverUncorePMUs[0].get()) ? (serverUncorePMUs[0]->getNumEDCChannels()) : 0;
         }
         return 0;
     }
@@ -1784,7 +1868,7 @@ public:
     //! \return QPI Link Speed in GBytes/second
     uint64 getQPILinkSpeed(uint32 socketNr, uint32 linkNr) const
     {
-        return hasPCICFGUncore() ? server_pcicfg_uncore[socketNr]->getQPILinkSpeed(linkNr) : max_qpi_speed;
+        return hasPCICFGUncore() ? serverUncorePMUs[socketNr]->getQPILinkSpeed(linkNr) : max_qpi_speed;
     }
 
     //! \brief Returns how many joules are in an internal processor energy unit
@@ -1917,7 +2001,7 @@ public:
     //! \brief Get the state of IDX accel counter
     //! \param accel ip index
     //! \param dev device index
-    //! \param counter_id perf couter index 
+    //! \param counter_id perf counter index
     //! \return State of IDX counter
     IDXCounterState getIDXAccelCounterState(uint32 accel, uint32 dev, uint32 counter_id);
 
@@ -2090,7 +2174,7 @@ public:
 
     bool HBMmemoryTrafficMetricsAvailable() const
     {
-        return server_pcicfg_uncore.empty() == false && server_pcicfg_uncore[0].get() != nullptr && server_pcicfg_uncore[0]->HBMAvailable();
+        return serverUncorePMUs.empty() == false && serverUncorePMUs[0].get() != nullptr && serverUncorePMUs[0]->HBMAvailable();
     }
 
     size_t getHBMCASTransferSize() const
@@ -2641,6 +2725,30 @@ uint64 getMCCounter(uint32 channel, uint32 counter, const CounterStateType & bef
     return after.MCCounter[channel][counter] - before.MCCounter[channel][counter];
 }
 
+/*! \brief Direct read of CXLCM PMU counter (counter meaning depends on the programming: power/performance/etc)
+    \param counter counter number
+    \param port port number
+    \param before CPU counter state before the experiment
+    \param after CPU counter state after the experiment
+*/
+template <class CounterStateType>
+uint64 getCXLCMCounter(uint32 port, uint32 counter, const CounterStateType& before, const CounterStateType& after)
+{
+    return after.CXLCMCounter[port][counter] - before.CXLCMCounter[port][counter];
+}
+
+/*! \brief Direct read of CXLDP PMU counter (counter meaning depends on the programming: power/performance/etc)
+    \param counter counter number
+    \param port port number
+    \param before CPU counter state before the experiment
+    \param after CPU counter state after the experiment
+*/
+template <class CounterStateType>
+uint64 getCXLDPCounter(uint32 port, uint32 counter, const CounterStateType& before, const CounterStateType& after)
+{
+    return after.CXLDPCounter[port][counter] - before.CXLDPCounter[port][counter];
+}
+
 /*! \brief Direct read of M3UPI PMU counter (counter meaning depends on the programming: power/performance/etc)
     \param counter counter number
     \param port UPI port number
@@ -2997,7 +3105,8 @@ public:
         maxCBOs = 128,
         maxMDFs = 128,
         maxIIOStacks = 16,
-        maxCounters = 4
+        maxCXLPorts = 6,
+        maxCounters = 8
     };
     enum EventPosition
     {
@@ -3019,6 +3128,8 @@ private:
     std::array<std::array<uint64, maxCounters>, maxMDFs> MDFCounter;
     std::array<std::array<uint64, maxCounters>, maxIIOStacks> IIOCounter;
     std::array<std::array<uint64, maxCounters>, maxIIOStacks> IRPCounter;
+    std::array<std::array<uint64, maxCounters>, maxCXLPorts> CXLCMCounter;
+    std::array<std::array<uint64, maxCounters>, maxCXLPorts> CXLDPCounter;
     std::array<uint64, maxCounters> UBOXCounter;
     std::array<uint64, maxChannels> DRAMClocks;
     std::array<uint64, maxChannels> HBMClocks;
@@ -3036,6 +3147,10 @@ private:
     friend uint64 getHBMClocks(uint32 channel, const CounterStateType & before, const CounterStateType & after);
     template <class CounterStateType>
     friend uint64 getMCCounter(uint32 channel, uint32 counter, const CounterStateType & before, const CounterStateType & after);
+    template <class CounterStateType>
+    friend uint64 getCXLCMCounter(uint32 port, uint32 counter, const CounterStateType& before, const CounterStateType& after);
+    template <class CounterStateType>
+    friend uint64 getCXLDPCounter(uint32 port, uint32 counter, const CounterStateType& before, const CounterStateType& after);
     template <class CounterStateType>
     friend uint64 getM3UPICounter(uint32 port, uint32 counter, const CounterStateType& before, const CounterStateType& after);
     template <class CounterStateType>
@@ -3077,6 +3192,8 @@ public:
         MDFCounter{{}},
         IIOCounter{{}},
         IRPCounter{{}},
+        CXLCMCounter{{}},
+        CXLDPCounter{{}},
         UBOXCounter{{}},
         DRAMClocks{{}},
         HBMClocks{{}},
@@ -3180,11 +3297,13 @@ public:
 class SystemCounterState : public SocketCounterState
 {
     friend class PCM;
+    friend std::vector<uint64> getPCICFGEvent(const PCM::RawEventEncoding& eventEnc, const SystemCounterState& before, const SystemCounterState& after);
 
     std::vector<std::vector<uint64> > incomingQPIPackets; // each 64 byte
     std::vector<std::vector<uint64> > outgoingQPIFlits; // idle or data/non-data flits depending on the architecture
     std::vector<std::vector<uint64> > TxL0Cycles;
     uint64 uncoreTSC;
+    std::unordered_map<PCM::RawEventEncoding, std::vector<uint64> , PCM::PCICFGRegisterEncodingHash, PCM::PCICFGRegisterEncodingCmp> PCICFGValues{};
 
 protected:
     void readAndAggregate(std::shared_ptr<SafeMsrHandle> handle)
@@ -3194,6 +3313,7 @@ protected:
     }
 
 public:
+    std::vector<uint64> CXLWriteMem,CXLWriteCache;
     friend uint64 getIncomingQPILinkBytes(uint32 socketNr, uint32 linkNr, const SystemCounterState & before, const SystemCounterState & after);
     friend uint64 getIncomingQPILinkBytes(uint32 socketNr, uint32 linkNr, const SystemCounterState & now);
     friend double getOutgoingQPILinkUtilization(uint32 socketNr, uint32 linkNr, const SystemCounterState & before, const SystemCounterState & after);
@@ -3204,6 +3324,8 @@ public:
         uncoreTSC(0)
     {
         PCM * m = PCM::getInstance();
+        CXLWriteMem.resize(m->getNumSockets(),0);
+        CXLWriteCache.resize(m->getNumSockets(),0);
         incomingQPIPackets.resize(m->getNumSockets(),
                                   std::vector<uint64>((uint32)m->getQPILinksPerSocket(), 0));
         outgoingQPIFlits.resize(m->getNumSockets(),
@@ -3957,6 +4079,32 @@ uint64 getNumberOfCustomEvents(int32 eventCounterNr, const CounterStateType & be
     return after.Event[eventCounterNr] - before.Event[eventCounterNr];
 }
 
+
+/*! \brief Computes number of bytes Writen from CXL Cache
+
+    \param before CPU counter state before the experiment
+    \param after CPU counter state after the experiment
+    \return Number of bytes
+*/
+//template <class CounterStateType>
+inline uint64 getCXLWriteCacheBytes(uint32 socket,const SystemCounterState & before,const SystemCounterState & after)
+{
+        return (after.CXLWriteCache[socket] - before.CXLWriteCache[socket]) * 64;
+}
+
+/*! \brief Computes number of bytes Writen from CXL Memory
+
+    \param before CPU counter state before the experiment
+    \param after CPU counter state after the experiment
+    \return Number of bytes
+*/
+//template <class CounterStateType>
+inline uint64 getCXLWriteMemBytes(uint32 socket, const SystemCounterState & before,const SystemCounterState & after)
+{
+
+        return (after.CXLWriteMem[socket] - before.CXLWriteMem[socket]) * 64;
+}
+
 /*! \brief Get estimation of QPI data traffic per incoming QPI link
 
     Returns an estimation of number of data bytes transferred to a socket over Intel(r) Quick Path Interconnect
@@ -4284,6 +4432,34 @@ inline double getRetiring(const CounterStateType & before, const CounterStateTyp
     if (PCM::getInstance()->isHWTMAL1Supported())
         return double(after.RetiringSlots - before.RetiringSlots)/double(getAllSlots(before, after));
     return 0.;
+}
+
+inline std::vector<uint64> getPCICFGEvent(const PCM::RawEventEncoding & eventEnc, const SystemCounterState& before, const SystemCounterState& after)
+{
+    std::vector<uint64> result{};
+    auto beforeIter = before.PCICFGValues.find(eventEnc);
+    auto afterIter = after.PCICFGValues.find(eventEnc);
+    if (beforeIter != before.PCICFGValues.end() &&
+        afterIter != after.PCICFGValues.end())
+    {
+        const auto& beforeValues = beforeIter->second;
+        const auto& afterValues = afterIter->second;
+        assert(beforeValues.size() == afterValues.size());
+        const size_t sz = beforeValues.size();
+        for (size_t i = 0; i < sz; ++i)
+        {
+            switch (eventEnc[PCM::PCICFGEventPosition::type])
+            {
+            case PCM::MSRType::Freerun:
+                result.push_back(afterValues[i] - beforeValues[i]);
+                break;
+            case PCM::MSRType::Static:
+                result.push_back(afterValues[i]);
+                break;
+            }
+        }
+    }
+    return result;
 }
 
 template <class CounterStateType>
