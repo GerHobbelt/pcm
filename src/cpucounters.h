@@ -290,6 +290,7 @@ class IDX_PMU
     HWRegisterPtr resetControl;
     HWRegisterPtr freezeControl;
 public:
+    HWRegisterPtr generalControl;
     std::vector<HWRegisterPtr> counterControl;
     std::vector<HWRegisterPtr> counterValue;
     std::vector<HWRegisterPtr> counterFilterWQ;
@@ -303,6 +304,7 @@ public:
         const uint32 socketId_,
         const HWRegisterPtr& resetControl_,
         const HWRegisterPtr& freezeControl_,
+        const HWRegisterPtr& generalControl_,
         const std::vector<HWRegisterPtr> & counterControl,
         const std::vector<HWRegisterPtr> & counterValue,
         const std::vector<HWRegisterPtr> & counterFilterWQ,
@@ -547,6 +549,7 @@ class SimpleCounterState
 public:
     SimpleCounterState() : data(0)
     { }
+    uint64 getRawData() const {return data;}
     virtual ~SimpleCounterState() { }
 };
 
@@ -805,8 +808,16 @@ public:
     {
         IDX_IAA = 0,
         IDX_DSA,
-        IDX_HCx,
+        IDX_QAT,
         IDX_MAX
+    };
+
+    enum IDX_OPERATION
+    {
+        QAT_TLM_STOP = 0,
+        QAT_TLM_START,
+        QAT_TLM_REFRESH,
+        QAT_TLM_MAX
     };
 
     struct SimplePCIeDevInfo
@@ -1132,7 +1143,7 @@ public:
     uint32 getNumOfIDXAccelDevs(int accel) const;
 
     //! \brief Returns the number of IDX counters
-    uint32 getMaxNumOfIDXAccelCtrs() const;
+    uint32 getMaxNumOfIDXAccelCtrs(int accel) const;
 
     //! \brief Returns the numa node of IDX accel dev
     uint32 getNumaNodeOfIDXAccelDev(uint32 accel, uint32 dev) const;
@@ -1875,6 +1886,11 @@ public:
     //! \param IIOStack id of the IIO stack to program (-1 for all, if parameter omitted)
     void programIRPCounters(uint64 rawEvents[4], int IIOStack = -1);
 
+    //! \brief Control QAT telemetry service
+    //! \param dev device index
+    //! \param operation control code 
+    void controlQATTelemetry(uint32 dev, uint32 operation);
+
     //! \brief Program IDX events
     //! \param events config of event to program
     //! \param filters_wq filters(work queue) of event to program 
@@ -2439,7 +2455,9 @@ protected:
              SKLL3HitPos = 1,
                L2HitMPos = 2,
             SKLL2MissPos = 2,
-                L2HitPos = 3
+            HSXL2MissPos = 2,
+                L2HitPos = 3,
+             HSXL2RefPos = 3
     };
     uint64 InvariantTSC; // invariant time stamp counter
     uint64 CStateResidency[PCM::MAX_C_STATE + 1];
@@ -3483,8 +3501,15 @@ double getActiveRelativeFrequency(const CounterStateType & before, const Counter
 template <class CounterStateType>
 double getL2CacheHitRatio(const CounterStateType& before, const CounterStateType& after) // 0.0 - 1.0
 {
-    if (!PCM::getInstance()->isL2CacheHitRatioAvailable()) return 0;
+    auto* pcm = PCM::getInstance();
+    if (!pcm->isL2CacheHitRatioAvailable()) return 0;
     const auto hits = getL2CacheHits(before, after);
+    if (pcm->memoryEventErrata())
+    {
+        const auto all = after.Event[BasicCounterState::HSXL2RefPos] - before.Event[BasicCounterState::HSXL2RefPos];
+        if (all == 0ULL) return 0.;
+        return double(hits) / double(all);
+    }
     const auto misses = getL2CacheMisses(before, after);
     const auto all = double(hits + misses);
     if (all == 0.0) return 0.;
@@ -3570,6 +3595,13 @@ uint64 getL2CacheHits(const CounterStateType & before, const CounterStateType & 
         uint64 L2Miss = after.Event[BasicCounterState::ArchLLCMissPos] - before.Event[BasicCounterState::ArchLLCMissPos];
         uint64 L2Ref = after.Event[BasicCounterState::ArchLLCRefPos] - before.Event[BasicCounterState::ArchLLCRefPos];
         return L2Ref - L2Miss;
+    }
+    else if (pcm->memoryEventErrata())
+    {
+        const auto all = after.Event[BasicCounterState::HSXL2RefPos] - before.Event[BasicCounterState::HSXL2RefPos];
+        const auto misses = after.Event[BasicCounterState::HSXL2MissPos] - before.Event[BasicCounterState::HSXL2MissPos];
+        const auto hits = (all > misses) ? (all - misses) : 0ULL;
+        return hits;
     }
     return after.Event[BasicCounterState::L2HitPos] - before.Event[BasicCounterState::L2HitPos];
 }
