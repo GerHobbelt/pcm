@@ -623,9 +623,41 @@ std::string getPCMDashboardJSON(const PCMDashboardType type, int ns, int nu, int
             panel->push(t);
             panel1->push(t);
         }
+        for (std::string m : { "DRAM ", "Persistent Memory " })
+        {
+            auto t = createTarget(m + "Total",
+            "(" + influxDBUncore_Uncore_Counters(S, m + "Writes") + "+" + influxDBUncore_Uncore_Counters(S, m + "Reads") + ")/1048576",
+            "(" + prometheusCounters(S, m + "Writes", false) + "+" + prometheusCounters(S, m + "Reads", false) + ")/1048576");
+            panel->push(t);
+            panel1->push(t);
+        }
         dashboard.push(panel);
         dashboard.push(panel1);
     }
+
+    auto panel = std::make_shared<GraphPanel>(0, y, width, height, "PMEM/DRAM Bandwidth Ratio", "PMEM/DRAM", false);
+    auto panel1 = std::make_shared<BarGaugePanel>(width, y, max_width - width, height, "PMEM/DRAM Bandwidth Ratio");
+    y += height;
+    for (size_t s = 0; s < NumSockets; ++s)
+    {
+        const auto S = std::to_string(s);
+        auto t = createTarget("Socket" + S,
+            "(" + influxDBUncore_Uncore_Counters(S, "Persistent Memory Writes") +
+            "+" + influxDBUncore_Uncore_Counters(S, "Persistent Memory Reads") +
+            ")/" +
+            "(" + influxDBUncore_Uncore_Counters(S, "DRAM Writes") +
+            "+" + influxDBUncore_Uncore_Counters(S, "DRAM Reads") + ")",
+            "(" + prometheusCounters(S, "Persistent Memory Writes", false) +
+            "+" + prometheusCounters(S, "Persistent Memory Reads", false) +
+            ")/" +
+            "(" + prometheusCounters(S, "DRAM Writes", false) +
+            "+" + prometheusCounters(S, "DRAM Reads", false) +")");
+        panel->push(t);
+        panel1->push(t);
+    }
+    dashboard.push(panel);
+    dashboard.push(panel1);
+
     auto upi = [&](const std::string & m, const bool utilization)
     {
         for (size_t s = 0; s < NumSockets; ++s)
