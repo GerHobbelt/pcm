@@ -340,7 +340,7 @@ enum ServerUncoreMemoryMetrics
 };
 
 //! Object to access uncore counters in a socket/processor with microarchitecture codename SandyBridge-EP (Jaketown) or Ivytown-EP or Ivytown-EX
-class ServerPCICFGUncore
+class ServerUncorePMUs
 {
     friend class PCM;
     int32 iMCbus,UPIbus,M2Mbus;
@@ -369,9 +369,9 @@ class ServerPCICFGUncore
     static std::vector<std::pair<uint32, uint32> > socket2UPIbus;
     static std::vector<std::pair<uint32, uint32> > socket2M2Mbus;
 
-    ServerPCICFGUncore();                                         // forbidden
-    ServerPCICFGUncore(ServerPCICFGUncore &);                     // forbidden
-    ServerPCICFGUncore & operator = (const ServerPCICFGUncore &); // forbidden
+    ServerUncorePMUs();                                         // forbidden
+    ServerUncorePMUs(ServerUncorePMUs &);                     // forbidden
+    ServerUncorePMUs & operator = (const ServerUncorePMUs &); // forbidden
     static PciHandleType * createIntelPerfMonDevice(uint32 groupnr, int32 bus, uint32 dev, uint32 func, bool checkVendor = false);
     void programIMC(const uint32 * MCCntConfig);
     void programEDC(const uint32 * EDCCntConfig);
@@ -413,7 +413,7 @@ public:
     //! \brief Initialize access data structures
     //! \param socket_ socket id
     //! \param pcm pointer to PCM instance
-    ServerPCICFGUncore(uint32 socket_, const PCM * pcm);
+    ServerUncorePMUs(uint32 socket_, const PCM * pcm);
     //! \brief Program performance counters (disables programming power counters)
     void program();
     //! \brief Get the number of integrated controller reads (in cache lines)
@@ -450,7 +450,7 @@ public:
     //! \param port QPI port id
     uint64 getOutgoingFlits(uint32 port);
 
-    ~ServerPCICFGUncore();
+    ~ServerUncorePMUs();
 
     //! \brief Program power counters (disables programming performance counters)
     //! \param mc_profile memory controller measurement profile. See description of profiles in pcm-power.cpp
@@ -575,7 +575,7 @@ class PCM_API PCM
     friend class ServerUncore;
     friend class PerfVirtualControlRegister;
     friend class Aggregator;
-    friend class ServerPCICFGUncore;
+    friend class ServerUncorePMUs;
     PCM();     // forbidden to call directly because it is a singleton
     PCM(const PCM &) = delete;
     PCM & operator = (const PCM &) = delete;
@@ -619,7 +619,7 @@ class PCM_API PCM
     static PCM * instance;
     bool programmed_core_pmu{false};
     std::vector<std::shared_ptr<SafeMsrHandle> > MSR;
-    std::vector<std::shared_ptr<ServerPCICFGUncore> > server_pcicfg_uncore;
+    std::vector<std::shared_ptr<ServerUncorePMUs> > serverUncorePMUs;
     std::vector<UncorePMU> pcuPMUs;
     std::vector<std::map<int32, UncorePMU> > iioPMUs;
     std::vector<std::map<int32, UncorePMU> > irpPMUs;
@@ -1570,7 +1570,7 @@ public:
         case SKX:
         case ICX:
         case SPR:
-            return (server_pcicfg_uncore.size() && server_pcicfg_uncore[0].get()) ? (server_pcicfg_uncore[0]->getNumQPIPorts()) : 0;
+            return (serverUncorePMUs.size() && serverUncorePMUs[0].get()) ? (serverUncorePMUs[0]->getNumQPIPorts()) : 0;
         }
         return 0;
     }
@@ -1596,7 +1596,7 @@ public:
         case SPR:
         case BDX:
         case KNL:
-            return (server_pcicfg_uncore.size() && server_pcicfg_uncore[0].get()) ? (server_pcicfg_uncore[0]->getNumMC()) : 0;
+            return (serverUncorePMUs.size() && serverUncorePMUs[0].get()) ? (serverUncorePMUs[0]->getNumMC()) : 0;
         }
         return 0;
     }
@@ -1623,7 +1623,7 @@ public:
         case BDX:
         case KNL:
         case SNOWRIDGE:
-            return (server_pcicfg_uncore.size() && server_pcicfg_uncore[0].get()) ? (server_pcicfg_uncore[0]->getNumMCChannels()) : 0;
+            return (serverUncorePMUs.size() && serverUncorePMUs[0].get()) ? (serverUncorePMUs[0]->getNumMCChannels()) : 0;
         }
         return 0;
     }
@@ -1652,7 +1652,7 @@ public:
         case BDX:
         case KNL:
         case SNOWRIDGE:
-            return (socket < server_pcicfg_uncore.size() && server_pcicfg_uncore[socket].get()) ? (server_pcicfg_uncore[socket]->getNumMCChannels(controller)) : 0;
+            return (socket < serverUncorePMUs.size() && serverUncorePMUs[socket].get()) ? (serverUncorePMUs[socket]->getNumMCChannels(controller)) : 0;
         }
         return 0;
     }
@@ -1664,7 +1664,7 @@ public:
         switch (cpu_model)
         {
         case KNL:
-            return (server_pcicfg_uncore.size() && server_pcicfg_uncore[0].get()) ? (server_pcicfg_uncore[0]->getNumEDCChannels()) : 0;
+            return (serverUncorePMUs.size() && serverUncorePMUs[0].get()) ? (serverUncorePMUs[0]->getNumEDCChannels()) : 0;
         }
         return 0;
     }
@@ -1784,7 +1784,7 @@ public:
     //! \return QPI Link Speed in GBytes/second
     uint64 getQPILinkSpeed(uint32 socketNr, uint32 linkNr) const
     {
-        return hasPCICFGUncore() ? server_pcicfg_uncore[socketNr]->getQPILinkSpeed(linkNr) : max_qpi_speed;
+        return hasPCICFGUncore() ? serverUncorePMUs[socketNr]->getQPILinkSpeed(linkNr) : max_qpi_speed;
     }
 
     //! \brief Returns how many joules are in an internal processor energy unit
@@ -2090,7 +2090,7 @@ public:
 
     bool HBMmemoryTrafficMetricsAvailable() const
     {
-        return server_pcicfg_uncore.empty() == false && server_pcicfg_uncore[0].get() != nullptr && server_pcicfg_uncore[0]->HBMAvailable();
+        return serverUncorePMUs.empty() == false && serverUncorePMUs[0].get() != nullptr && serverUncorePMUs[0]->HBMAvailable();
     }
 
     size_t getHBMCASTransferSize() const
