@@ -798,6 +798,7 @@ void PCM::initCStateSupportTables()
         case BAYTRAIL:
         case CHERRYTRAIL:
         case APOLLO_LAKE:
+        case GEMINI_LAKE:
         case DENVERTON:
         case ADL:
         case RPL:
@@ -867,6 +868,7 @@ void PCM::initCStateSupportTables()
         case AVOTON:
         case CHERRYTRAIL:
         case APOLLO_LAKE:
+        case GEMINI_LAKE:
         case DENVERTON:
         PCM_SKL_PATH_CASES
         case ADL:
@@ -1506,6 +1508,7 @@ bool PCM::detectNominalFrequency()
                || cpu_model == BROADWELL
                || cpu_model == AVOTON
                || cpu_model == APOLLO_LAKE
+               || cpu_model == GEMINI_LAKE
                || cpu_model == DENVERTON
                || useSKLPath()
                || cpu_model == SNOWRIDGE
@@ -4173,6 +4176,8 @@ const char * PCM::getUArchCodename(const int32 cpu_model_param) const
             return "Cherrytrail";
         case APOLLO_LAKE:
             return "Apollo Lake";
+        case GEMINI_LAKE:
+            return "Gemini Lake";
         case DENVERTON:
             return "Denverton";
         case SNOWRIDGE:
@@ -5136,7 +5141,7 @@ PCM::ErrorCode PCM::program(const RawPMUConfigs& curPMUConfigs_, const bool sile
     FixedEventControlRegister fixedReg;
     auto setOtherConf = [&conf, &fixedReg, &globalRegPos](const RawPMUConfig& corePMUConfig)
     {
-        if (globalRegPos < corePMUConfig.programmable.size())
+        if ((size_t)globalRegPos < corePMUConfig.programmable.size())
         {
             conf.OffcoreResponseMsrValue[0] = corePMUConfig.programmable[globalRegPos].first[OCR0Pos];
             conf.OffcoreResponseMsrValue[1] = corePMUConfig.programmable[globalRegPos].first[OCR1Pos];
@@ -8924,6 +8929,7 @@ void PCM::initLLCReadMissLatencyEvents(uint64 * events, uint32 & opCode)
     switch (cpu_model)
     {
         case ICX:
+        case SPR:
         case SNOWRIDGE:
             umask = 1ULL;
             break;
@@ -8937,6 +8943,9 @@ void PCM::initLLCReadMissLatencyEvents(uint64 * events, uint32 & opCode)
     {
         case ICX:
             umask_ext = 0xC817FE;
+            break;
+        case SPR:
+            umask_ext = 0x00C817FE;
             break;
         case SNOWRIDGE:
             umask_ext = 0xC827FE;
