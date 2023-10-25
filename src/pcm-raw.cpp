@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BSD-3-Clause
-// Copyright (c) 2009-2022, Intel Corporation
+// Copyright (c) 2009-2023, Intel Corporation
 
  /*!     \file pcm-raw.cpp
          \brief Example of using CPU counters: implements a performance counter monitoring utility with raw events interface
@@ -582,6 +582,24 @@ bool addEventFromDB(PCM::RawPMUConfigs& curPMUConfigs, string fullEventStr)
         // cout << "Counter: " << CounterStr << "\n";
         int fixedCounter = -1;
         fixed = (pcm_sscanf(CounterStr) >> s_expect("Fixed counter ") >> fixedCounter) ? true : false;
+        if (!fixed){
+            bool counter_match=false;
+            std::stringstream ss(CounterStr);
+            // to get current event position
+            int event_pos = curPMUConfigs[pmuName].programmable.size();
+            // loop through counter string and check if event pos matches any counter values
+            for (int i = 0; ss >> i;) {
+                if(event_pos == i)
+                    counter_match = true;  
+                if (ss.peek() == ',')
+                    ss.ignore();
+            }
+            if(!counter_match)
+            {
+                std::cerr << "ERROR: position of " << fullEventStr << " event in the command is " << event_pos<<" but the supported counters are "<<CounterStr<<"\n";
+                return false;
+            }
+        }
         bool offcore = false;
         if (EventMap::isField(eventStr, "Offcore"))
         {
@@ -861,7 +879,7 @@ bool addEvent(PCM::RawPMUConfigs & curPMUConfigs, string eventStr)
         cerr << "ERROR: empty config description in event description \"" << eventStr << "\"\n";
         return false;
     }
-    if (pmuName == "core")
+    if (pmuName == "core" || pmuName == "atom")
     {
         config = initCoreConfig();
     }
@@ -1024,12 +1042,17 @@ void printRowBegin(const std::string & EventName, const CoreCounterState & Befor
 }
 
 template <class MetricFunc>
-void printRow(const std::string & EventName, MetricFunc metricFunc, const std::vector<CoreCounterState>& BeforeState, const std::vector<CoreCounterState>& AfterState, PCM* m, const CsvOutputType outputType, PrintOffset& printOffset)
+void printRow(const std::string & EventName, MetricFunc metricFunc, const std::vector<CoreCounterState>& BeforeState, const std::vector<CoreCounterState>& AfterState, PCM* m,
+    const CsvOutputType outputType, PrintOffset& printOffset, const pcm::TopologyEntry::CoreType & coreType, const std::string & pmuType)
 {
     printRowBegin(EventName, BeforeState[0], AfterState[0], m, outputType, printOffset);
 
     for (uint32 core = 0; core < m->getNumCores(); ++core)
     {
+        if (extendPrintout && m->isHybrid() && m->getCoreType(core) != coreType)
+        {
+            continue;
+        }
         if (!(show_partial_core_output && ycores.test(core) == false))
         {
             if (outputType == Header1) {
@@ -1037,16 +1060,23 @@ void printRow(const std::string & EventName, MetricFunc metricFunc, const std::v
                 printOffset.end++;
             }
             else if (outputType == Header2)
-                cout << separator << "core" ;
-            else if (outputType == Data)
-                cout << separator << metricFunc(BeforeState[core], AfterState[core]);
+                cout << separator << pmuType;
+            else if (outputType == Data) {
+                cout << separator;
+                if (m->isHybrid() == false || m->getCoreType(core) == coreType) {
+                    cout << metricFunc(BeforeState[core], AfterState[core]);
+                }
+            }
             else if (outputType == Header21) {
-                cout << separator << "core_SKT" << m->getSocketId(core) << "_CORE" << core;
+                cout << separator << pmuType << "_SKT" << m->getSocketId(core) << "_CORE" << core;
                 printOffset.end++;
             }
             else if (outputType == Json) {
-                cout << separator << "core_SKT" << m->getSocketId(core) << "_CORE" << core <<
-                    jsonSeparator << metricFunc(BeforeState[core], AfterState[core]);
+                cout << separator << pmuType << "_SKT" << m->getSocketId(core) << "_CORE" << core <<
+                    jsonSeparator;
+                if (m->isHybrid() == false || m->getCoreType(core) == coreType) {
+                    cout << metricFunc(BeforeState[core], AfterState[core]);
+                }
             } else
                 assert(!"unknown output type");
         }
@@ -1316,9 +1346,9 @@ void printTransposed(const PCM::RawPMUConfigs& curPMUConfigs,
                     }
                 }
             };
-            if (type == "core")
+            auto printCores = [&](const pcm::TopologyEntry::CoreType & coreType)
             {
-                typedef uint64 (*FuncType) (const CoreCounterState& before, const CoreCounterState& after);
+                typedef uint64(*FuncType) (const CoreCounterState& before, const CoreCounterState& after);
                 static FuncType funcFixed[] = { [](const CoreCounterState& before, const CoreCounterState& after) { return getInstructionsRetired(before, after); },
                               [](const CoreCounterState& before, const CoreCounterState& after) { return getCycles(before, after); },
                               [](const CoreCounterState& before, const CoreCounterState& after) { return getRefCycles(before, after); },
@@ -1338,7 +1368,7 @@ void printTransposed(const PCM::RawPMUConfigs& curPMUConfigs,
                             if (is_header && is_header_printed)
                                 break;
 
-                            printRow(event.second.empty() ? fixedCoreEventNames[cnt] : event.second, funcFixed[cnt], BeforeState, AfterState, m, outputType, printOffset);
+                            printRow(event.second.empty() ? fixedCoreEventNames[cnt] : event.second, funcFixed[cnt], BeforeState, AfterState, m, outputType, printOffset, coreType, type);
 
                             if (is_header)
                                 is_header_printed = true;
@@ -1347,7 +1377,7 @@ void printTransposed(const PCM::RawPMUConfigs& curPMUConfigs,
                             {
                                 for (uint32 t = 0; t < 4; ++t)
                                 {
-                                    printRow(topdownEventNames[t], funcTopDown[t], BeforeState, AfterState, m, outputType, printOffset);
+                                    printRow(topdownEventNames[t], funcTopDown[t], BeforeState, AfterState, m, outputType, printOffset, coreType, type);
                                 }
                             }
                         }
@@ -1360,12 +1390,20 @@ void printTransposed(const PCM::RawPMUConfigs& curPMUConfigs,
                         break;
 
                     const std::string name = (event.second.empty()) ? (type + "Event" + std::to_string(i)) : event.second;
-                    printRow(name, [&i](const CoreCounterState& before, const CoreCounterState& after) { return getNumberOfCustomEvents(i, before, after); }, BeforeState, AfterState, m, outputType, printOffset);
+                    printRow(name, [&i](const CoreCounterState& before, const CoreCounterState& after) { return getNumberOfCustomEvents(i, before, after); }, BeforeState, AfterState, m, outputType, printOffset, coreType, type);
                     ++i;
 
                     if (is_header)
                         is_header_printed = true;
                 }
+            };
+            if (type == "core")
+            {
+                printCores(pcm::TopologyEntry::Core);
+            }
+            else if (type == "atom")
+            {
+                printCores(pcm::TopologyEntry::Atom);
             }
             else if (type == "thread_msr")
             {
@@ -1495,12 +1533,17 @@ void print(const PCM::RawPMUConfigs& curPMUConfigs,
         const auto & type = typeEvents.first;
         const auto & events = typeEvents.second.programmable;
         const auto & fixedEvents = typeEvents.second.fixed;
-        if (type == "core")
+        auto printCores = [&m, &BeforeState, &AfterState, &type, &fixedEvents, &events, &outputType](const pcm::TopologyEntry::CoreType & coreType)
         {
             for (uint32 core = 0; core < m->getNumCores(); ++core)
             {
                 if (show_partial_core_output && ycores.test(core) == false)
                     continue;
+
+                if (m->isHybrid() && m->getCoreType(core) != coreType)
+                {
+                    continue;
+                }
 
                 const uint64 fixedCtrValues[] = {
                     getInstructionsRetired(BeforeState[core], AfterState[core]),
@@ -1516,7 +1559,7 @@ void print(const PCM::RawPMUConfigs& curPMUConfigs,
                 };
                 for (const auto& event : fixedEvents)
                 {
-                    auto print = [&](const std::string & metric, const uint64 value)
+                    auto print = [&](const std::string& metric, const uint64 value)
                     {
                         choose(outputType,
                             [m, core]() { cout << "SKT" << m->getSocketId(core) << "CORE" << core << separator; },
@@ -1543,11 +1586,19 @@ void print(const PCM::RawPMUConfigs& curPMUConfigs,
                 {
                     choose(outputType,
                         [m, core]() { cout << "SKT" << m->getSocketId(core) << "CORE" << core << separator; },
-                        [&event, &i]() { if (event.second.empty()) cout << "COREEvent" << i << separator;  else cout << event.second << separator; },
+                        [&event, &i, &type]() { if (event.second.empty()) cout << type << "Event" << i << separator;  else cout << event.second << separator; },
                         [&]() { cout << getNumberOfCustomEvents(i, BeforeState[core], AfterState[core]) << separator; });
                     ++i;
                 }
             }
+        };
+        if (type == "core")
+        {
+            printCores(pcm::TopologyEntry::Core);
+        }
+        else if (type == "atom")
+        {
+            printCores(pcm::TopologyEntry::Atom);
         }
         else if (type == "m3upi")
         {
