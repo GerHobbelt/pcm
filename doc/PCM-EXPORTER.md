@@ -1,4 +1,4 @@
-# Intel&reg; Performance Counter Monitor (Intel&reg; PCM) Prometheus exporter [![Build Status](https://travis-ci.com/opcm/pcm.svg?branch=master)](https://travis-ci.com/opcm/pcm)
+# Intel&reg; Performance Counter Monitor (Intel&reg; PCM) Prometheus exporter
 
 
 pcm-sensor-server is a collector exposing Intel processor metrics over http in JSON or Prometheus (exporter text based) format. Also [available as a docker container](DOCKER_README.md).
@@ -25,6 +25,11 @@ Valid Options:
                            stabilize the async counter fetching.
     -h|--help            : This information
 ```
+
+The default output of pcm-sensor-server endpoint in a browser:
+
+![image](https://user-images.githubusercontent.com/25432609/226344012-8783e154-998e-48a7-a2ca-f2c42af9c843.png)
+
 
 The PCM exporter can be used together with Grafana to obtain these Intel processor metrics (see [how-to](../scripts/grafana/README.md)):
 
