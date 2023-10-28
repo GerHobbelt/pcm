@@ -1327,19 +1327,25 @@ bool PCM::discoverSystemTopology()
         {
             pcm_sscanf(buffer) >> s_expect("processor\t: ") >> entry.os_id;
             //std::cout << "os_core_id: " << entry.os_id << "\n";
-            TemporalThreadAffinity _(entry.os_id);
-            pcm_cpuid(0xb, 0x0, cpuid_args);
-            int apic_id = cpuid_args.array[3];
+            try {
+                TemporalThreadAffinity _(entry.os_id);
+                pcm_cpuid(0xb, 0x0, cpuid_args);
+                int apic_id = cpuid_args.array[3];
 
-            populateEntry(entry, apic_id);
-            if (populateHybridEntry(entry, entry.os_id) == false)
-            {
-                return false;
+                populateEntry(entry, apic_id);
+                if (populateHybridEntry(entry, entry.os_id) == false)
+                {
+                    return false;
+                }
+
+                topology[entry.os_id] = entry;
+                socketIdMap[entry.socket] = 0;
+                ++num_online_cores;
             }
-
-            topology[entry.os_id] = entry;
-            socketIdMap[entry.socket] = 0;
-            ++num_online_cores;
+            catch (std::exception &)
+            {
+                std::cerr << "Marking core " << entry.os_id << " offline\n";
+            }
         }
     }
     //std::cout << std::flush;
@@ -5630,11 +5636,10 @@ PCM::ErrorCode PCM::program(const RawPMUConfigs& curPMUConfigs_, const bool sile
                         const auto deviceID = c.first[PCICFGEventPosition::deviceID];
                         forAllIntelDevices([&locations, &deviceID, &c](const uint32 group, const uint32 bus, const uint32 device, const uint32 function, const uint32 device_id)
                             {
-                                if (deviceID == device_id)
+                                if (deviceID == device_id && PciHandleType::exists(group, bus, device, function))
                                 {
-                                    // group, bus, device, function, offset
-                                    PCICFGRegisterEncoding item = { group, bus, device, function, (uint32)c.first[PCICFGEventPosition::offset] };
-                                    locations.push_back(item);
+                                    // PciHandleType shared ptr, offset
+                                    locations.push_back(PCICFGRegisterEncoding{ std::make_shared<PciHandleType>(group, bus, device, function), (uint32)c.first[PCICFGEventPosition::offset] });
                                 }
                             });
                         PCICFGRegisterLocations[c.first] = locations;
@@ -6026,26 +6031,27 @@ void PCM::readPCICFGRegisters(SystemCounterState& systemState)
     auto read = [this, &systemState](const RawEventConfig& cfg) {
         const RawEventEncoding& reEnc = cfg.first;
         systemState.PCICFGValues[reEnc].clear();
-        for (auto& regAddr : PCICFGRegisterLocations[reEnc])
+        for (auto& reg : PCICFGRegisterLocations[reEnc])
         {
             const auto width = reEnc[PCICFGEventPosition::width];
-            if (PciHandleType::exists(regAddr[0], regAddr[1], regAddr[2], regAddr[3]))
+            auto& h = reg.first;
+            const auto& offset = reg.second;
+            if (h.get())
             {
-                PciHandleType h(regAddr[0], regAddr[1], regAddr[2], regAddr[3]);
                 uint64 value = ~0ULL;
                 uint32 value32 = 0;
                 switch (width)
                 {
                 case 16:
-                    h.read32(regAddr[4], &value32);
+                    h->read32(offset, &value32);
                     value = (uint64)extract_bits_ui(value32, 0, 15);
                     break;
                 case 32:
-                    h.read32(regAddr[4], &value32);
+                    h->read32(offset, &value32);
                     value = (uint64)value32;
                     break;
                 case 64:
-                    h.read64(regAddr[4], &value);
+                    h->read64(offset, &value);
                     break;
                 default:
                     std::cerr << "ERROR: Unsupported width " << width << " for pcicfg register " << cfg.second << "\n";
@@ -8932,6 +8938,16 @@ uint32 PCM::getMaxNumOfCBoxes() const
          */
         num = (uint32)num_phys_cores_per_socket;
     }
+#ifdef PCM_USE_PERF
+    if (num == 0)
+    {
+        num = (uint32)enumeratePerfPMUs("cbox", 100).size();
+    }
+    if (num == 0)
+    {
+        num = (uint32)enumeratePerfPMUs("cha", 100).size();
+    }
+#endif
     assert(num >= 0);
     return (uint32)num;
 }
