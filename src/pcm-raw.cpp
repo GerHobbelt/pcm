@@ -132,6 +132,10 @@ enum AddEventStatus
 
 bool tooManyEvents(const std::string & pmuName, const int event_pos, const std::string& fullEventStr)
 {
+    if (isRegisterEvent(pmuName))
+    {
+        return false;
+    }
     PCM* m = PCM::getInstance();
     assert(m);
     const int maxCounters = (pmuName == "core" || pmuName == "atom") ? m->getMaxCustomCoreEvents() : ServerUncoreCounterState::maxCounters;
@@ -756,6 +760,8 @@ AddEventStatus addEventFromDB(PCM::RawPMUConfigs& curPMUConfigs, string fullEven
             std::regex CounterMaskRegex("c(0x[0-9a-fA-F]+|[[:digit:]]+)");
             std::regex UmaskRegex("u(0x[0-9a-fA-F]+|[[:digit:]]+)");
             std::regex EdgeDetectRegex("e(0x[0-9a-fA-F]+|[[:digit:]]+)");
+            std::regex AnyThreadRegex("amt(0x[0-9a-fA-F]+|[[:digit:]]+)");
+            std::regex InvertRegex("i(0x[0-9a-fA-F]+|[[:digit:]]+)");
             while (mod != EventTokens.end())
             {
                 const auto assignment = split(*mod, '=');
@@ -797,6 +803,18 @@ AddEventStatus addEventFromDB(PCM::RawPMUConfigs& curPMUConfigs, string fullEven
                     // Edge Detect modifier
                     const std::string Str{ mod->begin() + 1, mod->end() };
                     setField("EdgeDetect", read_number(Str.c_str()));
+                }
+                else if (std::regex_match(mod->c_str(), AnyThreadRegex))
+                {
+                    // AnyThread modifier
+                    const std::string Str{ mod->begin() + 1, mod->end() };
+                    setField("AnyThread", read_number(Str.c_str()));
+                }
+                else if (std::regex_match(mod->c_str(), InvertRegex))
+                {
+                    // Invert modifier
+                    const std::string Str{ mod->begin() + 1, mod->end() };
+                    setField("Invert", read_number(Str.c_str()));
                 }
                 else if (std::regex_match(mod->c_str(), UmaskRegex))
                 {
@@ -1600,11 +1618,12 @@ void printTransposed(const PCM::RawPMUConfigs& curPMUConfigs,
             }
             else if (type == "imc")
             {
+                const std::string fixedEventName = (fixedEvents.empty() == false && fixedEvents[0].second.empty() == false) ? fixedEvents[0].second : "DRAMClocks";
                 choose(outputType,
                     [&]() { printUncoreRows(nullptr, (uint32) m->getMCChannelsPerSocket(), "CHAN"); },
                     [&]() { printUncoreRows(nullptr, (uint32) m->getMCChannelsPerSocket(), type); },
                     [&]() { printUncoreRows([](const uint32 u, const uint32 i, const ServerUncoreCounterState& before, const ServerUncoreCounterState& after) { return getMCCounter(u, i, before, after); }, (uint32)m->getMCChannelsPerSocket(),
-                            "DRAMClocks", [](const uint32 u, const ServerUncoreCounterState& before, const ServerUncoreCounterState& after) { return getDRAMClocks(u, before, after); });
+                        fixedEventName, [](const uint32 u, const ServerUncoreCounterState& before, const ServerUncoreCounterState& after) { return getDRAMClocks(u, before, after); });
                     });
             }
             else if (type == "m2m")
@@ -1613,6 +1632,14 @@ void printTransposed(const PCM::RawPMUConfigs& curPMUConfigs,
                     [&]() { printUncoreRows(nullptr, (uint32) m->getMCPerSocket(), "MC"); },
                     [&]() { printUncoreRows(nullptr, (uint32) m->getMCPerSocket(), type); },
                     [&]() { printUncoreRows([](const uint32 u, const uint32 i, const ServerUncoreCounterState& before, const ServerUncoreCounterState& after) { return getM2MCounter(u, i, before, after); }, (uint32)m->getMCPerSocket(), "MC");
+                    });
+            }
+            else if (type == "ha")
+            {
+                choose(outputType,
+                    [&]() { printUncoreRows(nullptr, (uint32) m->getMCPerSocket(), "HA"); },
+                    [&]() { printUncoreRows(nullptr, (uint32) m->getMCPerSocket(), type); },
+                    [&]() { printUncoreRows([](const uint32 u, const uint32 i, const ServerUncoreCounterState& before, const ServerUncoreCounterState& after) { return getHACounter(u, i, before, after); }, (uint32)m->getMCPerSocket(), "HA");
                     });
             }
             else if (type == "pcu")
@@ -1882,6 +1909,24 @@ void print(const PCM::RawPMUConfigs& curPMUConfigs,
                             [s, mc]() { cout << "SKT" << s << "MC" << mc << separator; },
                             [&event, &i]() { if (event.second.empty()) cout << "M2MEvent" << i << separator;  else cout << event.second << separator; },
                             [&]() { cout << getM2MCounter(mc, i, BeforeUncoreState[s], AfterUncoreState[s]) << separator; });
+                        ++i;
+                    }
+                }
+            }
+        }
+        else if (type == "ha")
+        {
+            for (uint32 s = 0; s < m->getNumSockets(); ++s)
+            {
+                for (uint32 mc = 0; mc < m->getMCPerSocket(); ++mc)
+                {
+                    int i = 0;
+                    for (auto& event : events)
+                    {
+                        choose(outputType,
+                            [s, mc]() { cout << "SKT" << s << "HA" << mc << separator; },
+                            [&event, &i]() { if (event.second.empty()) cout << "HAEvent" << i << separator;  else cout << event.second << separator; },
+                            [&]() { cout << getHACounter(mc, i, BeforeUncoreState[s], AfterUncoreState[s]) << separator; });
                         ++i;
                     }
                 }
