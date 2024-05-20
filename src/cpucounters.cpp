@@ -4166,12 +4166,17 @@ std::string PCM::getCPUBrandString()
 
 std::string PCM::getCPUFamilyModelString()
 {
+    return getCPUFamilyModelString(cpu_family, cpu_model, cpu_stepping);
+}
+
+std::string PCM::getCPUFamilyModelString(const uint32 cpu_family_, const uint32 cpu_model_, const uint32 cpu_stepping_)
+{
     char buffer[sizeof(int)*4*3+6];
     std::fill(buffer, buffer + sizeof(buffer), 0);
 #ifdef _MSC_VER
-    sprintf_s(buffer,sizeof(buffer),"GenuineIntel-%d-%2X-%X",this->cpu_family,this->cpu_model,this->cpu_stepping);
+    sprintf_s(buffer,sizeof(buffer),"GenuineIntel-%d-%2X-%X", cpu_family_, cpu_model_, cpu_stepping_);
 #else
-    snprintf(buffer,sizeof(buffer),"GenuineIntel-%d-%2X-%X",this->cpu_family,this->cpu_model,this->cpu_stepping);
+    snprintf(buffer,sizeof(buffer),"GenuineIntel-%d-%2X-%X", cpu_family_, cpu_model_, cpu_stepping_);
 #endif
     std::string result(buffer);
     return result;
@@ -6871,7 +6876,9 @@ void PCM::getPCICFGPMUsFromDiscovery(const unsigned int BoxType, const size_t s,
                 const auto n_regs = uncorePMUDiscovery->getBoxNumRegs(BoxType, s, pos);
                 auto makeRegister = [](const uint64 rawAddr)
                 {
+#ifndef PCI_ENABLE
                     constexpr auto PCI_ENABLE = 0x80000000ULL;
+#endif
                     UncorePMUDiscovery::PCICFGAddress Addr;
                     Addr.raw = rawAddr;
                     assert(Addr.raw & PCI_ENABLE);
