@@ -652,6 +652,15 @@ public:
         INVALID_PMU_ID
     };
 private:
+    std::unordered_map<std::string, int> strToUncorePMUID_ {
+    };
+public:
+    UncorePMUIDs strToUncorePMUID(const std::string & type) const
+    {
+        const auto iter = strToUncorePMUID_.find(type);
+        return (iter == strToUncorePMUID_.end()) ? INVALID_PMU_ID : (UncorePMUIDs)iter->second;
+    }
+private:
     typedef std::unordered_map<int, UncorePMUArrayType> UncorePMUMapType;
     // socket -> die -> pmu map -> pmu ref array
     std::vector< std::vector<UncorePMUMapType> > uncorePMUs;
@@ -714,7 +723,7 @@ private:
     }
 
     template <class T>
-    void readUncoreCounterValues(T& result, const size_t socket, const int pmu_id) const
+    void readUncoreCounterValues(T& result, const size_t socket) const
     {
         if (socket < uncorePMUs.size())
         {
@@ -723,9 +732,9 @@ private:
             {
                 TemporalThreadAffinity tempThreadAffinity(socketRefCore[socket]); // speedup trick for Linux
 
-                const auto& pmuIter = uncorePMUs[socket][die].find(pmu_id);
-                if (pmuIter != uncorePMUs[socket][die].end())
+                for (auto pmuIter = uncorePMUs[socket][die].begin(); pmuIter != uncorePMUs[socket][die].end(); ++pmuIter)
                 {
+                    const auto & pmu_id = pmuIter->first;
                     result.Counters[die][pmu_id].resize(pmuIter->second.size());
                     for (size_t unit = 0; unit < pmuIter->second.size(); ++unit)
                     {
@@ -795,6 +804,9 @@ private:
 
     std::shared_ptr<UncorePMUDiscovery> uncorePMUDiscovery;
 
+    template <class F>
+    void getPCICFGPMUsFromDiscovery(const unsigned int BoxType, const size_t s, F f) const;
+
     bool disable_JKT_workaround;
     bool blocked;              // track if time-driven counter update is running or not: PCM is blocked
 
@@ -843,7 +855,7 @@ public:
     enum { MAX_C_STATE = 10 }; // max C-state on Intel architecture
 
     //! \brief Returns true if the specified core C-state residency metric is supported
-    bool isCoreCStateResidencySupported(int state)
+    bool isCoreCStateResidencySupported(int state) const
     {
         if (state == 0 || state == 1)
             return true;

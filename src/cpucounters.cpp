@@ -5721,6 +5721,16 @@ PCM::ErrorCode PCM::program(const RawPMUConfigs& curPMUConfigs_, const bool sile
         {
             programCXLDP(events64);
         }
+        else if (strToUncorePMUID(type) != INVALID_PMU_ID)
+        {
+            const auto pmu_id = strToUncorePMUID(type);
+            programUncorePMUs(pmu_id, [&events64, &events, &pmu_id](UncorePMU& pmu)
+            {
+                uint64 * eventsIter = (uint64 *)events64;
+                pmu.initFreeze(UNC_PMON_UNIT_CTL_FRZ_EN);
+                PCM::program(pmu, eventsIter, eventsIter + (std::min)(events.programmable.size(), (size_t)ServerUncoreCounterState::maxCounters), UNC_PMON_UNIT_CTL_FRZ_EN);
+            });
+        }
         else
         {
             std::cerr << "ERROR: unrecognized PMU type \"" << type << "\" when trying to program PMUs.\n";
@@ -6564,9 +6574,7 @@ ServerUncoreCounterState PCM::getServerUncoreCounterState(uint32 socket)
         uint32 refCore = socketRefCore[socket];
         TemporalThreadAffinity tempThreadAffinity(refCore);
 
-        readUncoreCounterValues(result, socket, CBO_PMU_ID);
-
-        readUncoreCounterValues(result, socket, MDF_PMU_ID);
+        readUncoreCounterValues(result, socket);
 
         for (uint32 stack = 0; socket < iioPMUs.size() && stack < iioPMUs[socket].size() && stack < ServerUncoreCounterState::maxIIOStacks; ++stack)
         {
@@ -6586,10 +6594,7 @@ ServerUncoreCounterState PCM::getServerUncoreCounterState(uint32 socket)
             }
         }
 
-        readUncoreCounterValues(result, socket, UBOX_PMU_ID);
         result.UncClocks = getUncoreClocks(socket);
-
-        readUncoreCounterValues(result, socket, PCU_PMU_ID);
 
         for (size_t p = 0; p < getNumCXLPorts(socket); ++p)
         {
@@ -6851,6 +6856,53 @@ bool PCM::useLinuxPerfForUncore() const
 #endif
     return 1 == use;
 }
+
+template <class F>
+void PCM::getPCICFGPMUsFromDiscovery(const unsigned int BoxType, const size_t s, F f) const
+{
+    if (uncorePMUDiscovery.get())
+    {
+        const auto numBoxes = uncorePMUDiscovery->getNumBoxes(BoxType, s);
+        for (size_t pos = 0; pos < numBoxes; ++pos)
+        {
+            if (uncorePMUDiscovery->getBoxAccessType(BoxType, s, pos) == UncorePMUDiscovery::accessTypeEnum::PCICFG)
+            {
+                std::vector<std::shared_ptr<HWRegister> > CounterControlRegs, CounterValueRegs;
+                const auto n_regs = uncorePMUDiscovery->getBoxNumRegs(BoxType, s, pos);
+                auto makeRegister = [](const uint64 rawAddr)
+                {
+                    constexpr auto PCI_ENABLE = 0x80000000ULL;
+                    UncorePMUDiscovery::PCICFGAddress Addr;
+                    Addr.raw = rawAddr;
+                    assert(Addr.raw & PCI_ENABLE);
+                    try {
+                        auto handle = std::make_shared<PciHandleType>(0, (uint32)Addr.fields.bus,
+                                                                        (uint32)Addr.fields.device,
+                                                                        (uint32)Addr.fields.function);
+                        assert(handle.get());
+                        // std::cerr << "DEBUG: opened bdf "<< Addr.getStr() << "\n";
+                        return std::make_shared<PCICFGRegister64>(handle, (size_t)Addr.fields.offset);
+                    }
+                    catch (...)
+                    {
+                        // std::cerr << "DEBUG: error opening bdf "<< Addr.getStr() << "\n";
+                    }
+                    return std::shared_ptr<PCICFGRegister64>();
+                };
+                auto boxCtlRegister = makeRegister(uncorePMUDiscovery->getBoxCtlAddr(BoxType, s, pos));
+                if (boxCtlRegister.get())
+                {
+                    for (size_t r = 0; r < n_regs; ++r)
+                    {
+                        CounterControlRegs.push_back(makeRegister(uncorePMUDiscovery->getBoxCtlAddr(BoxType, s, pos, r)));
+                        CounterValueRegs.push_back(makeRegister(uncorePMUDiscovery->getBoxCtrAddr(BoxType, s, pos, r)));
+                    }
+                    f(UncorePMU(boxCtlRegister, CounterControlRegs, CounterValueRegs));
+                }
+            }
+        }
+    }
+};
 
 ServerUncorePMUs::ServerUncorePMUs(uint32 socket_, const PCM * pcm) :
      iMCbus(-1)
@@ -7288,9 +7340,12 @@ void ServerUncorePMUs::initDirect(uint32 socket_, const PCM * pcm)
     populateM2MPMUs(groupnr, M2Mbus, cpu_model, HBM_M2MRegisterLocation, hbm_m2mPMUs);
 
     int numChannels = 0;
-    if (cpu_model == PCM::SPR || cpu_model == PCM::EMR)
+    if (safe_getenv("PCM_NO_IMC_DISCOVERY") == std::string("1"))
     {
-        numChannels = 3;
+        if (cpu_model == PCM::SPR || cpu_model == PCM::EMR)
+        {
+            numChannels = 3;
+        }
     }
     if (cpu_model == PCM::SNOWRIDGE || cpu_model == PCM::ICX)
     {
@@ -7345,6 +7400,75 @@ void ServerUncorePMUs::initDirect(uint32 socket_, const PCM * pcm)
                 }
                 num_imc_channels.push_back(numChannels);
             }
+        }
+    }
+    else
+    {
+        switch (cpu_model)
+        {
+            case PCM::SPR:
+            case PCM::EMR:
+                {
+                    auto & uncorePMUDiscovery = pcm->uncorePMUDiscovery;
+                    const auto BoxType = SPR_IMC_BOX_TYPE;
+                    if (uncorePMUDiscovery.get())
+                    {
+                        const auto numBoxes = uncorePMUDiscovery->getNumBoxes(BoxType, socket_);
+                        for (size_t pos = 0; pos < numBoxes; ++pos)
+                        {
+                            if (uncorePMUDiscovery->getBoxAccessType(BoxType, socket_, pos) == UncorePMUDiscovery::accessTypeEnum::MMIO)
+                            {
+                                std::vector<std::shared_ptr<HWRegister> > CounterControlRegs, CounterValueRegs;
+                                const auto n_regs = uncorePMUDiscovery->getBoxNumRegs(BoxType, socket_, pos);
+                                auto makeRegister = [](const uint64 rawAddr, const uint32 bits) -> std::shared_ptr<HWRegister>
+                                {
+                                    const auto mapSize = SERVER_MC_CH_PMON_SIZE;
+                                    const auto alignedAddr = rawAddr & ~4095ULL;
+                                    const auto alignDelta = rawAddr & 4095ULL;
+                                    try {
+                                        auto handle = std::make_shared<MMIORange>(alignedAddr, mapSize, false);
+                                        assert(handle.get());
+                                        switch (bits)
+                                        {
+                                            case 32:
+                                                return std::make_shared<MMIORegister32>(handle, (size_t)alignDelta);
+                                            case 64:
+                                                return std::make_shared<MMIORegister64>(handle, (size_t)alignDelta);
+                                        }
+                                    }
+                                    catch (...)
+                                    {
+                                    }
+                                    return std::shared_ptr<HWRegister>();
+                                };
+
+                                auto boxCtlRegister = makeRegister(uncorePMUDiscovery->getBoxCtlAddr(BoxType, socket_, pos), 32);
+                                if (boxCtlRegister.get())
+                                {
+                                    for (size_t r = 0; r < n_regs; ++r)
+                                    {
+                                        CounterControlRegs.push_back(makeRegister(uncorePMUDiscovery->getBoxCtlAddr(BoxType, socket_, pos, r), 32));
+                                        CounterValueRegs.push_back(makeRegister(uncorePMUDiscovery->getBoxCtrAddr(BoxType, socket_, pos, r), 64));
+                                    }
+                                    imcPMUs.push_back(UncorePMU(boxCtlRegister,
+                                        CounterControlRegs,
+                                        CounterValueRegs,
+                                        makeRegister(uncorePMUDiscovery->getBoxCtlAddr(BoxType, socket_, pos) + SERVER_MC_CH_PMON_FIXED_CTL_OFFSET, 32),
+                                        makeRegister(uncorePMUDiscovery->getBoxCtlAddr(BoxType, socket_, pos) + SERVER_MC_CH_PMON_FIXED_CTR_OFFSET, 64)));
+                                }
+                            }
+                        }
+                    }
+                    if (imcPMUs.empty() == false)
+                    {
+                        numChannels = 2;
+                        for (size_t c = 0; c < imcPMUs.size(); c += numChannels)
+                        {
+                            num_imc_channels.push_back(numChannels);
+                        }
+                    }
+                }
+                break;
         }
     }
 
@@ -7495,11 +7619,28 @@ void ServerUncorePMUs::initDirect(uint32 socket_, const PCM * pcm)
     return;
 #endif
 
+    if (pcm->getNumSockets() <= 4 && safe_getenv("PCM_NO_UPILL_DISCOVERY") != std::string("1"))
+    {
+        switch (cpu_model)
+        {
+            case PCM::SPR:
+            case PCM::EMR:
+                {
+                    std::cerr << "INFO: Trying to detect UPILL PMU through uncore PMU discovery..\n";
+                    pcm->getPCICFGPMUsFromDiscovery(SPR_UPILL_BOX_TYPE, socket_, [this](const UncorePMU & pmu)
+                    {
+                        xpiPMUs.push_back(pmu);
+                    });
+                }
+                break;
+        }
+    }
+
     std::vector<std::shared_ptr<PciHandleType> > qpiLLHandles;
     auto xPI = pcm->xPI();
     try
     {
-        for (size_t i = 0; i < XPIRegisterLocation.size(); ++i)
+        if (xpiPMUs.empty()) for (size_t i = 0; i < XPIRegisterLocation.size(); ++i)
         {
             PciHandleType * handle = createIntelPerfMonDevice(groupnr, UPIbus, XPIRegisterLocation[i].first, XPIRegisterLocation[i].second, true);
             if (handle)
@@ -7525,7 +7666,7 @@ void ServerUncorePMUs::initDirect(uint32 socket_, const PCM * pcm)
         throw std::exception();
     }
 
-    for (auto & handle : qpiLLHandles)
+    if (xpiPMUs.empty()) for (auto & handle : qpiLLHandles)
     {
         if (cpu_model == PCM::SKX)
         {
