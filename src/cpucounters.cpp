@@ -339,17 +339,6 @@ void pcm_cpuid_bsd(int leaf, PCM_CPUID_INFO& info, int core)
 }
 #endif
 
-/* Adding the new version of cpuid with leaf and subleaf as an input */
-void pcm_cpuid(const unsigned leaf, const unsigned subleaf, PCM_CPUID_INFO & info)
-{
-    #ifdef _MSC_VER
-    __cpuidex(info.array, leaf, subleaf);
-    #else
-    __asm__ __volatile__ ("cpuid" : \
-                          "=a" (info.reg.eax), "=b" (info.reg.ebx), "=c" (info.reg.ecx), "=d" (info.reg.edx) : "a" (leaf), "c" (subleaf));
-    #endif
-}
-
 #ifdef __linux__
 bool isNMIWatchdogEnabled(const bool silent);
 bool keepNMIWatchdogEnabled();
@@ -1121,48 +1110,27 @@ bool PCM::discoverSystemTopology()
     socketIdMap_type socketIdMap;
 
     PCM_CPUID_INFO cpuid_args;
-    // init constants for CPU topology leaf 0xB
-    // adapted from Topology Enumeration Reference code for Intel 64 Architecture
-    // https://software.intel.com/en-us/articles/intel-64-architecture-processor-topology-enumeration
-    int wasCoreReported = 0, wasThreadReported = 0;
-    int subleaf = 0, levelType, levelShift;
-    //uint32 coreSelectMask = 0, smtSelectMask = 0;
     uint32 smtMaskWidth = 0;
-    //uint32 pkgSelectMask = (-1), pkgSelectMaskShift = 0;
-    uint32 corePlusSMTMaskWidth = 0;
     uint32 coreMaskWidth = 0;
+    uint32 l2CacheMaskShift = 0;
 
+    struct domain
+    {
+        TopologyEntry::DomainTypeID type = TopologyEntry::DomainTypeID::InvalidDomainTypeID;
+        unsigned levelShift = 0, nextLevelShift = 0, width = 0;
+    };
+    std::unordered_map<int, domain> topologyDomainMap;
     {
         TemporalThreadAffinity aff0(0);
-        do
-        {
-            pcm_cpuid(0xb, subleaf, cpuid_args);
-            if (cpuid_args.array[1] == 0)
-            { // if EBX ==0 then this subleaf is not valid, we can exit the loop
-                break;
-            }
-            levelType = extract_bits_ui(cpuid_args.array[2], 8, 15);
-            levelShift = extract_bits_ui(cpuid_args.array[0], 0, 4);
-            switch (levelType)
-            {
-            case 1: //level type is SMT, so levelShift is the SMT_Mask_Width
-                smtMaskWidth = levelShift;
-                wasThreadReported = 1;
-                break;
-            case 2: //level type is Core, so levelShift is the CorePlusSMT_Mask_Width
-                corePlusSMTMaskWidth = levelShift;
-                wasCoreReported = 1;
-                break;
-            default:
-                break;
-            }
-            subleaf++;
-        } while (1);
 
-        struct domain
+        if (initCoreMasks(smtMaskWidth, coreMaskWidth, l2CacheMaskShift) == false)
         {
-            unsigned type, levelShift, nextLevelShift, width;
-        };
+            std::cerr << "ERROR: Major problem? No leaf 0 under cpuid function 11.\n";
+            return false;
+        }
+
+        int subleaf = 0;
+
         std::vector<domain> topologyDomains;
         if (max_cpuid >= 0x1F)
         {
@@ -1171,7 +1139,7 @@ bool PCM::discoverSystemTopology()
             {
                 pcm_cpuid(0x1F, subleaf, cpuid_args);
                 domain d;
-                d.type = extract_bits_ui(cpuid_args.reg.ecx, 8, 15);
+                d.type = (TopologyEntry::DomainTypeID)extract_bits_ui(cpuid_args.reg.ecx, 8, 15);
                 if (d.type == TopologyEntry::DomainTypeID::InvalidDomainTypeID)
                 {
                     break;
@@ -1182,62 +1150,73 @@ bool PCM::discoverSystemTopology()
                 topologyDomains.push_back(d);
                 ++subleaf;
             } while (true);
-#if 0
+
+            if (topologyDomains.size())
+            {
+                domain d;
+                d.type = TopologyEntry::DomainTypeID::SocketPackageDomain;
+                d.levelShift = topologyDomains.back().nextLevelShift;
+                d.nextLevelShift = 32;
+                d.width = d.nextLevelShift - d.levelShift;
+                topologyDomains.push_back(d);
+            }
             for (size_t l = 0; l < topologyDomains.size(); ++l)
             {
-                std::cerr << "Topology level " << l <<
-                                      " type " << topologyDomains[l].type <<
-                                      " width " << topologyDomains[l].width <<
-                                      " levelShift " << topologyDomains[l].levelShift <<
-                                      " nextLevelShift " << topologyDomains[l].nextLevelShift << "\n";
-            }
+                topologyDomainMap[topologyDomains[l].type] = topologyDomains[l];
+#if 0
+                std::cerr << "Topology level: " << l <<
+                                      " type: " << topologyDomains[l].type <<
+                                      " (" << TopologyEntry::getDomainTypeStr(topologyDomains[l].type) << ")" <<
+                                      " width: " << topologyDomains[l].width <<
+                                      " levelShift: " << topologyDomains[l].levelShift <<
+                                      " nextLevelShift: " << topologyDomains[l].nextLevelShift << "\n";
 #endif
+            }
         }
     }
 
-    if (wasThreadReported && wasCoreReported)
-    {
-        coreMaskWidth = corePlusSMTMaskWidth - smtMaskWidth;
-    }
-    else if (!wasCoreReported && wasThreadReported)
-    {
-        coreMaskWidth = smtMaskWidth;
-    }
-    else
-    {
-        std::cerr << "ERROR: Major problem? No leaf 0 under cpuid function 11.\n";
-        return false;
-    }
-
-    (void) coreMaskWidth; // to suppress warnings on MacOS (unused vars)
-
-    uint32 l2CacheMaskShift = 0;
-#ifdef PCM_DEBUG_TOPOLOGY
-    uint32 threadsSharingL2;
-#endif
-    uint32 l2CacheMaskWidth;
-
-    pcm_cpuid(0x4, 2, cpuid_args); // get ID for L2 cache
-    l2CacheMaskWidth = 1 + extract_bits_ui(cpuid_args.array[0],14,25); // number of APIC IDs sharing L2 cache
-#ifdef PCM_DEBUG_TOPOLOGY
-    threadsSharingL2 = l2CacheMaskWidth;
-#endif
-    for( ; l2CacheMaskWidth > 1; l2CacheMaskWidth >>= 1)
-    {
-        l2CacheMaskShift++;
-    }
-#ifdef PCM_DEBUG_TOPOLOGY
-    std::cerr << "DEBUG: Number of threads sharing L2 cache = " << threadsSharingL2
-              << " [the most significant bit = " << l2CacheMaskShift << "]\n";
-#endif
-
 #ifndef __APPLE__
-    auto populateEntry = [&smtMaskWidth, &coreMaskWidth, &l2CacheMaskShift](TopologyEntry & entry, const int apic_id)
+    auto populateEntry = [&topologyDomainMap,&smtMaskWidth, &coreMaskWidth, &l2CacheMaskShift](TopologyEntry& entry)
     {
-        entry.thread_id = smtMaskWidth ? extract_bits_ui(apic_id, 0, smtMaskWidth - 1) : 0;
-        entry.core_id = (smtMaskWidth + coreMaskWidth) ? extract_bits_ui(apic_id, smtMaskWidth, smtMaskWidth + coreMaskWidth - 1) : 0;
-        entry.socket = extract_bits_ui(apic_id, smtMaskWidth + coreMaskWidth, 31);
-        entry.tile_id = extract_bits_ui(apic_id, l2CacheMaskShift, 31);
+        auto getAPICID = [&](const uint32 leaf)
+        {
+            PCM_CPUID_INFO cpuid_args;
+#if defined(__FreeBSD__) || defined(__DragonFly__)
+            pcm_cpuid_bsd(leaf, cpuid_args, entry.os_id);
+#else
+            pcm_cpuid(leaf, 0x0, cpuid_args);
+#endif
+            return cpuid_args.array[3];
+        };
+        if (topologyDomainMap.size())
+        {
+            auto getID = [&topologyDomainMap](const int apic_id, const TopologyEntry::DomainTypeID t)
+            {
+                const auto di = topologyDomainMap.find(t);
+                if (di != topologyDomainMap.end())
+                {
+                    const auto & d = di->second;
+                    return extract_bits_ui(apic_id, d.levelShift, d.nextLevelShift - 1);
+                }
+                return 0U;
+            };
+            entry.tile_id = extract_bits_ui(getAPICID(0xb), l2CacheMaskShift, 31);
+            const int apic_id = getAPICID(0x1F);
+            entry.thread_id = getID(apic_id, TopologyEntry::DomainTypeID::LogicalProcessorDomain);
+            entry.core_id = getID(apic_id, TopologyEntry::DomainTypeID::CoreDomain);
+            entry.module_id = getID(apic_id, TopologyEntry::DomainTypeID::ModuleDomain);
+            if (entry.tile_id == 0)
+            {
+                entry.tile_id = getID(apic_id, TopologyEntry::DomainTypeID::TileDomain);
+            }
+            entry.die_id = getID(apic_id, TopologyEntry::DomainTypeID::DieDomain);
+            entry.die_grp_id = getID(apic_id, TopologyEntry::DomainTypeID::DieGrpDomain);
+            entry.socket = getID(apic_id, TopologyEntry::DomainTypeID::SocketPackageDomain);
+        }
+        else
+        {
+            fillEntry(entry, smtMaskWidth, coreMaskWidth, l2CacheMaskShift, getAPICID(0xb));
+        }
     };
 #endif
 
@@ -1315,14 +1294,10 @@ bool PCM::discoverSystemTopology()
     {
         ThreadGroupTempAffinity affinity(i);
 
-        pcm_cpuid(0xb, 0x0, cpuid_args);
-
-        int apic_id = cpuid_args.array[3];
-
         TopologyEntry entry;
         entry.os_id = i;
 
-        populateEntry(entry, apic_id);
+        populateEntry(entry);
         if (populateHybridEntry(entry, i) == false)
         {
             return false;
@@ -1369,10 +1344,8 @@ bool PCM::discoverSystemTopology()
             //std::cout << "os_core_id: " << entry.os_id << "\n";
             try {
                 TemporalThreadAffinity _(entry.os_id);
-                pcm_cpuid(0xb, 0x0, cpuid_args);
-                int apic_id = cpuid_args.array[3];
 
-                populateEntry(entry, apic_id);
+                populateEntry(entry);
                 if (populateHybridEntry(entry, entry.os_id) == false)
                 {
                     return false;
@@ -1410,13 +1383,9 @@ bool PCM::discoverSystemTopology()
 
     for (int i = 0; i < num_cores; i++)
     {
-        pcm_cpuid_bsd(0xb, cpuid_args, i);
-
-        int apic_id = cpuid_args.array[3];
-
         entry.os_id = i;
 
-        populateEntry(entry, apic_id);
+        populateEntry(entry);
         if (populateHybridEntry(entry, i) == false)
         {
             return false;
@@ -1466,6 +1435,7 @@ bool PCM::discoverSystemTopology()
         MSR.push_back(std::make_shared<SafeMsrHandle>(i));
     }
 
+    assert(num_cores > 0);
     TopologyEntry entries[num_cores];
     if (MSR[0]->buildTopology(num_cores, entries) != 0) {
       std::cerr << "Unable to build CPU topology" << std::endl;
@@ -2865,7 +2835,7 @@ PCM::PCM() :
     if (safe_getenv("PCM_PRINT_TOPOLOGY") == "1")
 #endif
     {
-        printDetailedSystemTopology();
+        printDetailedSystemTopology(1);
     }
 
     initEnergyMonitoring();
@@ -2897,13 +2867,17 @@ PCM::PCM() :
 #endif
 }
 
-void PCM::printDetailedSystemTopology()
+void PCM::printDetailedSystemTopology(const int detailLevel)
 {
     // produce debug output similar to Intel MPI cpuinfo
     if (true)
     {
         std::cerr << "\n=====  Processor topology  =====\n";
-        std::cerr << "OS_Processor    Thread_Id       Core_Id         Tile_Id         Package_Id      Core_Type   Native_CPU_Model\n";
+        std::cerr << "OS_Processor    Thread_Id       Core_Id         ";
+        if (detailLevel > 0) std::cerr << "Module_Id       ";
+        std::cerr << "Tile_Id         ";
+        if (detailLevel > 0) std::cerr << "Die_Id          Die_Group_Id    ";
+        std::cerr << "Package_Id      Core_Type       Native_CPU_Model\n";
         std::map<uint32, std::vector<uint32> > os_id_by_core, os_id_by_tile, core_id_by_socket;
         size_t counter = 0;
         for (auto it = topology.begin(); it != topology.end(); ++it)
@@ -2911,9 +2885,11 @@ void PCM::printDetailedSystemTopology()
             std::cerr << std::left << std::setfill(' ')
                 << std::setw(16) << ((it->os_id >= 0) ? it->os_id : counter)
                 << std::setw(16) << it->thread_id
-                << std::setw(16) << it->core_id
-                << std::setw(16) << it->tile_id
-                << std::setw(16) << it->socket
+                << std::setw(16) << it->core_id;
+            if (detailLevel > 0) std::cerr << std::setw(16) << it->module_id;
+            std::cerr << std::setw(16) << it->tile_id;
+            if (detailLevel > 0) std::cerr << std::setw(16) << it->die_id << std::setw(16) << it->die_grp_id;
+            std::cerr << std::setw(16) << it->socket
                 << std::setw(16) << it->getCoreTypeStr()
                 << std::setw(16) << it->native_cpu_model
                 << "\n";
