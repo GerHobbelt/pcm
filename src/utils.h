@@ -494,6 +494,10 @@ inline uint32 extract_bits_ui(uint32 myin, uint32 beg, uint32 end)
 inline uint64 build_bit(uint32 beg, uint32 end)
 {
     uint64 myll = 0;
+    if (end > 63)
+    {
+        end = 63;
+    }
     if (end == 63)
     {
         myll = static_cast<uint64>(-1);
@@ -605,5 +609,26 @@ int readMaxFromSysFS(const char * path);
 bool readMapFromSysFS(const char * path, std::unordered_map<std::string, uint32> &result, bool silent = false);
 #endif
 
+inline uint64 insertBits(uint64 input, const uint64 value, const int64_t position, const uint64 width)
+{
+    const uint64 mask = (width == 64) ? (~0ULL) : ((1ULL << width) - 1ULL); // 1 -> 1b, 2 -> 11b, 3 -> 111b
+    input &= ~(mask << position); // clear
+    input |= (value & mask) << position;
+    return input;
+}
+
+inline uint64 roundDownTo4K(uint64 number) {
+    return number & ~0xFFFULL; // Mask the lower 12 bits to round down to 4K
+}
+
+inline uint64 roundUpTo4K(uint64 number) {
+    if (number % 4096ULL == 0ULL) {
+        // Already a multiple of 4K
+        return number;
+    } else {
+        // Round up to the next multiple of 4K
+        return ((number / 4096ULL) + 1ULL) * 4096ULL;
+    }
+}
 
 } // namespace pcm
