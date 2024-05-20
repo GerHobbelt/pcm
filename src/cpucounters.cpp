@@ -697,6 +697,7 @@ void PCM::initCStateSupportTables()
         case DENVERTON:
         case ADL:
         case RPL:
+        case MTL:
         case SNOWRIDGE:
             PCM_CSTATE_ARRAY(pkgCStateMsr, PCM_PARAM_PROTECT({0, 0, 0x3F8, 0, 0x3F9, 0, 0x3FA, 0, 0, 0, 0 }) );
         case NEHALEM_EP:
@@ -769,6 +770,7 @@ void PCM::initCStateSupportTables()
         PCM_SKL_PATH_CASES
         case ADL:
         case RPL:
+        case MTL:
         case SNOWRIDGE:
         case ICX:
         case SPR:
@@ -919,6 +921,7 @@ public:
         operation = PCM::IDX_OPERATION(val);
 #ifdef __linux__
         std::ostringstream sysfs_path(std::ostringstream::out);
+        std::string telemetry_filename;
         switch (operation)
         {
             case PCM::QAT_TLM_START: //enable
@@ -933,6 +936,18 @@ public:
                         std::hex << std::setw(2) << std::setfill('0') << b << ":" <<
                         std::hex << std::setw(2) << std::setfill('0') << d << "." <<
                         std::hex << f << "/telemetry/control";
+
+                    /*check telemetry for out-of tree driver*/
+                    telemetry_filename = readSysFS(sysfs_path.str().c_str(), true);
+                    if(!telemetry_filename.size()){
+                        /*is not oot driver, check telemetry for in tree driver  (since kernel 6.8)*/
+                        sysfs_path.str("");
+                        sysfs_path << std::string("/sys/kernel/debug/qat_4xxx_") <<
+                            std::hex << std::setw(4) << std::setfill('0') << domain << ":" <<
+                            std::hex << std::setw(2) << std::setfill('0') << b << ":" <<
+                            std::hex << std::setw(2) << std::setfill('0') << d << "." <<
+                            std::hex << f << "/telemetry/control";
+                    }
 
                     if (writeSysFS(sysfs_path.str().c_str(), (operation == PCM::QAT_TLM_START  ? "1" : "0")) == false)
                     {
@@ -949,7 +964,17 @@ public:
                         std::hex << std::setw(2) << std::setfill('0') << b << ":" <<
                         std::hex << std::setw(2) << std::setfill('0') << d << "." <<
                         std::hex << f << "/telemetry/device_data";
-
+                    /*check telemetry for out-of tree driver*/
+                    telemetry_filename = readSysFS(sysfs_path.str().c_str(), true);
+                    if(!telemetry_filename.size()){
+                        /*is not oot driver, check telemetry for in tree driver  (since kernel 6.8)*/
+                        sysfs_path.str("");
+                        sysfs_path << std::string("/sys/kernel/debug/qat_4xxx_") <<
+                            std::hex << std::setw(4) << std::setfill('0') << domain << ":" <<
+                            std::hex << std::setw(2) << std::setfill('0') << b << ":" <<
+                            std::hex << std::setw(2) << std::setfill('0') << d << "." <<
+                            std::hex << f << "/telemetry/device_data";
+                    }
                     data_cache.clear();
                     readMapFromSysFS(sysfs_path.str().c_str(), data_cache);
                 }
@@ -1595,6 +1620,7 @@ bool PCM::detectNominalFrequency()
                || cpu_model == KNL
                || cpu_model == ADL
                || cpu_model == RPL
+               || cpu_model == MTL
                || cpu_model == SKX
                || cpu_model == ICX
                || cpu_model == SPR
@@ -1853,7 +1879,8 @@ void PCM::initUncoreObjects()
            {
            case TGL:
            case ADL: // TGLClientBW works fine for ADL
-           case RPL: // TGLClientBW works fine for ADL
+           case RPL: // TGLClientBW works fine for RPL
+           case MTL: // TGLClientBW works fine for MTL
                clientBW = std::make_shared<TGLClientBW>();
                break;
 /*         Disabled since ADLClientBW requires 2x multiplier for BW on top
@@ -2378,17 +2405,28 @@ void PCM::initUncorePMUsDirect()
             for (auto & devInfo : devInfos)
             {
                 std::ostringstream qat_TLMCTL_sysfs_path(std::ostringstream::out);
+                /*parse telemetry follow rule of out of tree driver*/
                 qat_TLMCTL_sysfs_path << std::string("/sys/bus/pci/devices/") <<
                     std::hex << std::setw(4) << std::setfill('0') << devInfo.domain << ":" <<
                     std::hex << std::setw(2) << std::setfill('0') << devInfo.bus << ":" <<
                     std::hex << std::setw(2) << std::setfill('0') << devInfo.dev << "." <<
                     std::hex << devInfo.func << "/telemetry/control";
-                const std::string qatTLMCTLStr = readSysFS(qat_TLMCTL_sysfs_path.str().c_str(), true);
+                std::string qatTLMCTLStr = readSysFS(qat_TLMCTL_sysfs_path.str().c_str(), true);
                 if (!qatTLMCTLStr.size()) //check TLM feature available or NOT.
                 {
-                    std::cout << "Warning: IDX - QAT telemetry feature of B:0x" << std::hex << devInfo.bus << ",D:0x" << devInfo.dev << ",F:0x" << devInfo.func \
-                        << " is NOT available, skipped." << std::dec << std::endl;
-                    continue;
+                    qat_TLMCTL_sysfs_path.str("");
+                    /*parse telemetry follow rule of in tree driver*/
+                    qat_TLMCTL_sysfs_path << std::string("/sys/kernel/debug/qat_4xxx_") <<
+                        std::hex << std::setw(4) << std::setfill('0') << devInfo.domain << ":" <<
+                        std::hex << std::setw(2) << std::setfill('0') << devInfo.bus << ":" <<
+                        std::hex << std::setw(2) << std::setfill('0') << devInfo.dev << "." <<
+                        std::hex << devInfo.func << "/telemetry/control";                    
+                    qatTLMCTLStr = readSysFS(qat_TLMCTL_sysfs_path.str().c_str(), true);
+                    if(!qatTLMCTLStr.size()){
+                        std::cout << "Warning: IDX - QAT telemetry feature of B:0x" << std::hex << devInfo.bus << ",D:0x" << devInfo.dev << ",F:0x" << devInfo.func \
+                            << " is NOT available, skipped." << std::dec << std::endl;
+                        continue;
+                    }
                 }
                 idxPMUs[IDX_QAT].push_back(createQATPMU(devInfo.numa_node, devInfo.socket_id, devInfo.domain , devInfo.bus, devInfo.dev , devInfo.func));
             }
@@ -2430,9 +2468,9 @@ void PCM::initUncorePMUsDirect()
         IRP_UNIT_CTL = SPR_IRP_UNIT_CTL;
         break;
     }
+    irpPMUs.resize(num_sockets);
     if (IRP_UNIT_CTL)
     {
-        irpPMUs.resize(num_sockets);
         for (uint32 s = 0; s < (uint32)num_sockets; ++s)
         {
             auto& handle = MSR[socketRefCore[s]];
@@ -2452,6 +2490,49 @@ void PCM::initUncorePMUsDirect()
             }
         }
     }
+#if 0
+    auto findPCICFGPMU = [](const uint32 did,
+                            const int s,
+                            const uint32 CtlOffset,
+                            const std::vector<uint32> & CounterControlOffsets,
+                            const std::vector<uint32> & CounterValueOffsets)
+    {
+        int found = 0;
+        UncorePMU out;
+        forAllIntelDevices([&](const uint32 group, const uint32 bus, const uint32 device, const uint32 function, const uint32 device_id)
+        {
+            if (device_id == did)
+            {
+                if (s == found)
+                {
+                    auto handle = std::make_shared<PciHandleType>(group, bus, device, function);
+                    const size_t n_regs = 4;
+                    std::vector<std::shared_ptr<HWRegister> > CounterControlRegs, CounterValueRegs;
+                    for (size_t r = 0; r < n_regs; ++r)
+                    {
+                        CounterControlRegs.push_back(std::make_shared<PCICFGRegister32>(handle, CounterControlOffsets[r]));
+                        CounterValueRegs.push_back(std::make_shared<PCICFGRegister64>(handle, CounterValueOffsets[r]));
+                    }
+                    auto boxCtlRegister = std::make_shared<PCICFGRegister32>(handle, CtlOffset);
+                    // std::cerr << "socket " << std::hex <<  s <<  " device " << device_id << " " << group << ":" << bus << ":" << device << "@" << function << "\n" << std::dec;
+                    out = UncorePMU(boxCtlRegister, CounterControlRegs, CounterValueRegs);
+                }
+                ++found;
+            }
+        });
+        return out;
+    };
+    for (uint32 s = 0; s < (uint32)num_sockets; ++s)
+    {
+        switch (cpu_model)
+        {
+            case BDX:
+                irpPMUs[s][0] = findPCICFGPMU(0x6f39, s, 0xF4, {0xD8, 0xDC, 0xE0, 0xE4}, {0xA0, 0xB0, 0xB8, 0xC0});
+                iioPMUs[s][0] = findPCICFGPMU(0x6f34, s, 0xF4, {0xD8, 0xDC, 0xE0, 0xE4}, {0xA0, 0xA8, 0xB0, 0xB8});
+                break;
+        }
+    }
+#endif
 
     if (hasPCICFGUncore() && MSR.size())
     {
@@ -2976,6 +3057,7 @@ bool PCM::isCPUModelSupported(const int model_)
             || model_ == TGL
             || model_ == ADL
             || model_ == RPL
+            || model_ == MTL
             || model_ == SKX
             || model_ == ICX
             || model_ == SPR
@@ -3146,7 +3228,7 @@ PCM::ErrorCode PCM::program(const PCM::ProgramMode mode_, const void * parameter
         canUsePerf = false;
         if (!silent) std::cerr << "Installed Linux kernel perf does not support hardware top-down level-1 counters. Using direct PMU programming instead.\n";
     }
-    if (canUsePerf && (cpu_model == ADL || cpu_model == RPL))
+    if (canUsePerf && (cpu_model == ADL || cpu_model == RPL || cpu_model == MTL))
     {
         canUsePerf = false;
         if (!silent) std::cerr << "Linux kernel perf rejects an architectural event on your platform. Using direct PMU programming instead.\n";
@@ -3232,6 +3314,7 @@ PCM::ErrorCode PCM::program(const PCM::ProgramMode mode_, const void * parameter
         switch ( cpu_model ) {
             case ADL:
             case RPL:
+            case MTL:
                 LLCArchEventInit(hybridAtomEventDesc);
                 hybridAtomEventDesc[2].event_number = SKL_MEM_LOAD_RETIRED_L2_MISS_EVTNR;
                 hybridAtomEventDesc[2].umask_value = SKL_MEM_LOAD_RETIRED_L2_MISS_UMASK;
@@ -4544,6 +4627,8 @@ const char * PCM::getUArchCodename(const int32 cpu_model_param) const
             return "Alder Lake";
         case RPL:
             return "Raptor Lake";
+        case MTL:
+            return "Meteor Lake";
         case SKX:
             if (cpu_model_param >= 0)
             {
@@ -9270,6 +9355,7 @@ uint32 PCM::getMaxNumOfIIOStacks() const
 {
     if (iioPMUs.size() > 0)
     {
+        assert(irpPMUs.size());
         assert(iioPMUs[0].size() == irpPMUs[0].size());
         return (uint32)iioPMUs[0].size();
     }
@@ -9320,6 +9406,9 @@ void PCM::programIIOCounters(uint64 rawEvents[4], int IIOStack)
         case PCM::SNOWRIDGE:
             stacks_count = SNR_IIO_STACK_COUNT;
             break;
+        case PCM::BDX:
+            stacks_count = BDX_IIO_STACK_COUNT;
+            break;
         case PCM::SKX:
         default:
             stacks_count = SKX_IIO_STACK_COUNT;
@@ -9355,6 +9444,7 @@ void PCM::programIIOCounters(uint64 rawEvents[4], int IIOStack)
 
 void PCM::programIRPCounters(uint64 rawEvents[4], int IIOStack)
 {
+    // std::cerr << "PCM::programIRPCounters IRP PMU unit (stack) " << IIOStack << " getMaxNumOfIIOStacks(): " << getMaxNumOfIIOStacks()<< "\n";
     std::vector<int32> IIO_units;
     if (IIOStack == -1)
     {
@@ -9380,6 +9470,7 @@ void PCM::programIRPCounters(uint64 rawEvents[4], int IIOStack)
                 std::cerr << "IRP PMU unit (stack) " << unit << " is not found \n";
                 continue;
             }
+            // std::cerr << "Programming IRP PMU unit (stack) " << unit << " on socket " << i << " \n";
             auto& pmu = irpPMUs[i][unit];
             pmu.initFreeze(UNC_PMON_UNIT_CTL_RSV);
 
