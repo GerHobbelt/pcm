@@ -89,6 +89,11 @@ int convertUnknownToInt(size_t size, char* value);
 
 #ifdef _MSC_VER
 
+void PCM_API restrictDriverAccess(LPCTSTR path)
+{
+    restrictDriverAccessNative(path);
+}
+
 HMODULE hOpenLibSys = NULL;
 
 #ifndef NO_WINRING
@@ -1153,6 +1158,41 @@ bool PCM::discoverSystemTopology()
             }
             subleaf++;
         } while (1);
+
+        struct domain
+        {
+            unsigned type, levelShift, nextLevelShift, width;
+        };
+        std::vector<domain> topologyDomains;
+        if (max_cpuid >= 0x1F)
+        {
+            subleaf = 0;
+            do
+            {
+                pcm_cpuid(0x1F, subleaf, cpuid_args);
+                domain d;
+                d.type = extract_bits_ui(cpuid_args.reg.ecx, 8, 15);
+                if (d.type == TopologyEntry::DomainTypeID::InvalidDomainTypeID)
+                {
+                    break;
+                }
+                d.nextLevelShift = extract_bits_ui(cpuid_args.reg.eax, 0, 4);
+                d.levelShift = topologyDomains.empty() ? 0 : topologyDomains.back().nextLevelShift;
+                d.width = d.nextLevelShift - d.levelShift;
+                topologyDomains.push_back(d);
+                ++subleaf;
+            } while (true);
+#if 0
+            for (size_t l = 0; l < topologyDomains.size(); ++l)
+            {
+                std::cerr << "Topology level " << l <<
+                                      " type " << topologyDomains[l].type <<
+                                      " width " << topologyDomains[l].width <<
+                                      " levelShift " << topologyDomains[l].levelShift <<
+                                      " nextLevelShift " << topologyDomains[l].nextLevelShift << "\n";
+            }
+#endif
+        }
     }
 
     if (wasThreadReported && wasCoreReported)
@@ -1730,6 +1770,14 @@ void PCM::initEnergyMonitoring()
                 dram_energy_status.push_back(
                     std::make_shared<CounterWidthExtender>(
                     new CounterWidthExtender::MsrHandleCounter(MSR[socketRefCore[i]], MSR_DRAM_ENERGY_STATUS), 32, 10000));
+    }
+
+    if (ppEnergyMetricsAvailable() && MSR.size() && num_sockets == 1 && pp_energy_status.empty())
+    {
+        pp_energy_status.push_back(std::make_shared<CounterWidthExtender>(
+            new CounterWidthExtender::MsrHandleCounter(MSR[socketRefCore[0]], MSR_PP0_ENERGY_STATUS), 32, 10000));
+        pp_energy_status.push_back(std::make_shared<CounterWidthExtender>(
+            new CounterWidthExtender::MsrHandleCounter(MSR[socketRefCore[0]], MSR_PP1_ENERGY_STATUS), 32, 10000));
     }
 }
 
@@ -2732,6 +2780,8 @@ PCM::PCM() :
     num_phys_cores_per_socket(0),
     num_online_cores(0),
     num_online_sockets(0),
+    accel(0),
+    accel_counters_num_max(0),
     core_gen_counter_num_max(0),
     core_gen_counter_num_used(0), // 0 means no core gen counters used
     core_gen_counter_width(0),
@@ -3497,6 +3547,7 @@ PCM::ErrorCode PCM::program(const PCM::ProgramMode mode_, const void * parameter
     lastProgrammedCustomCounters.clear();
     lastProgrammedCustomCounters.resize(num_cores);
     core_global_ctrl_value = 0ULL;
+    isHWTMAL1Supported(); // ínit value to prevent MT races
 
     std::vector<std::future<void> > asyncCoreResults;
     std::vector<PCM::ErrorCode> programmingStatuses(num_cores, PCM::Success);
@@ -6063,6 +6114,14 @@ void PCM::readAndAggregateEnergyCounters(const uint32 socket, CounterStateType &
 
     if (socket < (uint32)dram_energy_status.size())
         result.DRAMEnergyStatus += dram_energy_status[socket]->read();
+
+    if (socket == 0)
+    {
+        for (size_t pp = 0; pp < pp_energy_status.size(); ++pp)
+        {
+            result.PPEnergyStatus[pp] += pp_energy_status[pp]->read();
+        }
+    }
 }
 
 template <class CounterStateType>
@@ -6473,6 +6532,26 @@ uint32 PCM::getNumOnlineCores() const
 uint32 PCM::getNumSockets() const
 {
     return (uint32)num_sockets;
+}
+
+uint32 PCM::getAccel() const
+{
+    return accel;
+}
+
+void PCM::setAccel(uint32 input)
+{
+    accel = input;
+}
+
+uint32 PCM::getNumberofAccelCounters() const
+{
+    return accel_counters_num_max;
+}
+
+void PCM::setNumberofAccelCounters(uint32 input)
+{
+    accel_counters_num_max = input;
 }
 
 uint32 PCM::getNumOnlineSockets() const

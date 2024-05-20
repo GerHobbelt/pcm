@@ -34,10 +34,17 @@ namespace pcm {
     std::string safe_getenv(const char* env);
 }
 
+#ifdef _MSC_VER
+#define PCM_SET_DLL_DIR SetDllDirectory(_T(""));
+#else
+#define PCM_SET_DLL_DIR
+#endif
+
 #define PCM_MAIN_NOTHROW \
 int mainThrows(int argc, char * argv[]); \
 int main(int argc, char * argv[]) \
 { \
+    PCM_SET_DLL_DIR \
     if (pcm::safe_getenv("PCM_NO_MAIN_EXCEPTION_HANDLER") == std::string("1")) return mainThrows(argc, argv); \
     try { \
         return mainThrows(argc, argv); \
@@ -532,9 +539,12 @@ inline uint64 extract_bits(uint64 myin, uint32 beg, uint32 end)
 }
 
 #ifdef _MSC_VER
+
+#define PCM_MSR_DRV_NAME TEXT("\\\\.\\RDMSR")
+
 inline HANDLE openMSRDriver()
 {
-    return CreateFile(TEXT("\\\\.\\RDMSR"), GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL);
+    return CreateFile(PCM_MSR_DRV_NAME, GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL);
 }
 #endif
 
@@ -630,5 +640,39 @@ inline uint64 roundUpTo4K(uint64 number) {
         return ((number / 4096ULL) + 1ULL) * 4096ULL;
     }
 }
+
+std::pair<int64,int64> parseBitsParameter(const char * param);
+template <class T, class R>
+inline bool readOldValueHelper(const std::pair<int64,int64> & bits, T & value, const bool & write, R readValue)
+{
+    if (bits.first >= 0 && write)
+    {
+        // to write bits need to read the old value first
+        T old_value = 0;
+        if (!readValue(old_value))
+        {
+            return false;
+        }
+        value = insertBits(old_value, value, bits.first, bits.second - bits.first + 1);
+    }
+    return true;
+}
+
+template <class T>
+inline void extractBitsPrintHelper(const std::pair<int64,int64> & bits, T & value, const bool & dec)
+{
+    std::cout << " Read ";
+    if (bits.first >= 0)
+    {
+        std::cout << "bits "<< std::dec << bits.first << ":" << bits.second << " ";
+        if (!dec) std::cout << std::hex << std::showbase;
+        value = extract_bits(value, bits.first, bits.second);
+    }
+    std::cout << "value " << value;
+}
+
+#ifdef _MSC_VER
+void restrictDriverAccessNative(LPCTSTR path);
+#endif
 
 } // namespace pcm
