@@ -32,6 +32,8 @@ if(UNIX)  # LINUX, FREE_BSD, APPLE
       $<$<CONFIG:RelWithDebInfo>:PCM_SILENT>
     )
 
+    target_compile_options(PCM_STATIC_SILENT PRIVATE "-fPIC")
+
     # libpcm.so
     add_library(PCM_SHARED SHARED pcm-core.cpp)
     # PCM_SILENT in Release* for pcm-core.cpp
@@ -140,6 +142,15 @@ foreach(PROJECT_NAME ${PROJECT_NAMES})
     endif(${PROJECT_NAME} STREQUAL pcm-raw)
 
     if(${PROJECT_NAME} STREQUAL pcm-sensor-server)
+      if(NO_SSL)
+        message(STATUS "SSL is disabled")
+      else()
+        message(STATUS "Compiling with SSL support, requires libssl-dev or openssl-devel or libopenssl-devel or libopenssl-dev package installed")
+        message(STATUS "To disable SSL support, use -DNO_SSL=1 option")
+        find_package(OpenSSL REQUIRED)
+        target_compile_options(${PROJECT_NAME} PRIVATE "-DUSE_SSL")
+        set(LIBS ${LIBS} OpenSSL::SSL OpenSSL::Crypto)
+      endif()
       file(READ pcm-sensor-server.service.in SENSOR_SERVICE_IN)
       string(REPLACE "@@CMAKE_INSTALL_SBINDIR@@" "${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_SBINDIR}" SENSOR_SERVICE "${SENSOR_SERVICE_IN}")
       file(WRITE "${CMAKE_BINARY_DIR}/pcm-sensor-server.service" "${SENSOR_SERVICE}")

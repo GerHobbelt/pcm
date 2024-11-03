@@ -550,9 +550,20 @@ bool PCM::L3CacheOccupancyMetricAvailable() const
     return (cpuinfo.reg.edx & 1)?true:false;
 }
 
+bool isMBMEnforced()
+{
+    static int flag = -1;
+    if (flag < 0)
+    {
+        // flag not yet initialized
+        flag = pcm::safe_getenv("PCM_ENFORCE_MBM") == std::string("1") ? 1 : 0;
+    }
+    return flag > 0;
+}
+
 bool PCM::CoreLocalMemoryBWMetricAvailable() const
 {
-    if (cpu_model == SKX && cpu_stepping < 5) return false; // SKZ4 errata
+    if (isMBMEnforced() == false && cpu_model == SKX && cpu_stepping < 5) return false; // SKZ4 errata
     PCM_CPUID_INFO cpuinfo;
     if (!(QOSMetricAvailable() && L3QOSMetricAvailable()))
             return false;
@@ -562,7 +573,7 @@ bool PCM::CoreLocalMemoryBWMetricAvailable() const
 
 bool PCM::CoreRemoteMemoryBWMetricAvailable() const
 {
-    if (cpu_model == SKX && cpu_stepping < 5) return false; // SKZ4 errata
+    if (isMBMEnforced() == false && cpu_model == SKX && cpu_stepping < 5) return false; // SKZ4 errata
     PCM_CPUID_INFO cpuinfo;
     if (!(QOSMetricAvailable() && L3QOSMetricAvailable()))
         return false;
@@ -8059,7 +8070,8 @@ void ServerUncorePMUs::initDirect(uint32 socket_, const PCM * pcm)
     {
         switch (cpu_model)
         {
-            case PCM::SPR:
+            // don't use the discovery on SPR to work-around the issue
+	    // mentioned in https://lore.kernel.org/lkml/20221129191023.936738-1-kan.liang@linux.intel.com/T/
             case PCM::EMR:
                 {
                     std::cerr << "INFO: Trying to detect UPILL PMU through uncore PMU discovery..\n";
