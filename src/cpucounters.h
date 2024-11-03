@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BSD-3-Clause
-// Copyright (c) 2009-2022, Intel Corporation
+// Copyright (c) 2009-2024, Intel Corporation
 // written by Roman Dementiev
 //            Thomas Willhalm
 //            and others
@@ -28,6 +28,7 @@
 #include "msr.h"
 #include "pci.h"
 #include "tpmi.h"
+#include "pmt.h"
 #include "bw.h"
 #include "width_extender.h"
 #include "exceptions/unsupported_processor_exception.hpp"
@@ -1216,6 +1217,7 @@ private:
     void readQPICounters(SystemCounterState & counterState);
     void readPCICFGRegisters(SystemCounterState& result);
     void readMMIORegisters(SystemCounterState& result);
+    void readPMTRegisters(SystemCounterState& result);
     void reportQPISpeed() const;
     void readCoreCounterConfig(const bool complainAboutMSR = false);
     void readCPUMicrocodeLevel();
@@ -1567,9 +1569,46 @@ public:
                 && a[MMIOEventPosition::membar_bits2] == b[MMIOEventPosition::membar_bits2];
         }
     };
+    struct PMTEventPosition
+    {
+        enum constants
+        {
+            UID = PCICFGEventPosition::deviceID,
+            offset = PCICFGEventPosition::offset,
+            type = PCICFGEventPosition::type,
+            lsb = 3,
+            msb = 4
+        };
+    };
+    struct PMTRegisterEncodingHash
+    {
+        std::size_t operator()(const RawEventEncoding & e) const
+        {
+            return std::hash<uint64>{}(e[PMTEventPosition::UID]);
+        }
+    };
+    struct PMTRegisterEncodingHash2
+    {
+        std::size_t operator()(const RawEventEncoding & e) const
+        {
+            std::size_t h1 = std::hash<uint64>{}(e[PMTEventPosition::UID]);
+            std::size_t h2 = std::hash<uint64>{}(e[PMTEventPosition::offset]);
+            std::size_t h3 = std::hash<uint64>{}(e[PMTEventPosition::lsb]);
+            return h1 ^ (h2 << 1ULL) ^ (h3 << 2ULL);
+        }
+    };
+    struct PMTRegisterEncodingCmp
+    {
+        bool operator ()(const RawEventEncoding& a, const RawEventEncoding& b) const
+        {
+            return a[PMTEventPosition::UID] == b[PMTEventPosition::UID];
+        }
+    };
+    typedef std::shared_ptr<TelemetryArray> PMTRegisterEncoding; // TelemetryArray shared ptr
 private:
     std::unordered_map<RawEventEncoding, std::vector<PCICFGRegisterEncoding>, PCICFGRegisterEncodingHash, PCICFGRegisterEncodingCmp> PCICFGRegisterLocations{};
     std::unordered_map<RawEventEncoding, std::vector<MMIORegisterEncoding>, MMIORegisterEncodingHash, MMIORegisterEncodingCmp> MMIORegisterLocations{};
+    std::unordered_map<RawEventEncoding, std::vector<PMTRegisterEncoding>, PMTRegisterEncodingHash, PMTRegisterEncodingCmp> PMTRegisterLocations{};
 public:
 
     TopologyEntry::CoreType getCoreType(const unsigned coreID) const
@@ -1860,7 +1899,7 @@ private:
         }
         return false;
     }
-    RawPMUConfig threadMSRConfig{}, packageMSRConfig{}, pcicfgConfig{}, mmioConfig{};
+    RawPMUConfig threadMSRConfig{}, packageMSRConfig{}, pcicfgConfig{}, mmioConfig{}, pmtConfig{};
 public:
 
     //! \brief Reads CPU family
@@ -2455,6 +2494,9 @@ public:
             || cpu_model == PCM::BDX
             || cpu_model == PCM::SKX
             || cpu_model == PCM::ICX
+            || cpu_model == PCM::SPR
+            || cpu_model == PCM::EMR
+            || cpu_model == PCM::SRF
             ;
     }
 
@@ -2506,6 +2548,7 @@ public:
 	        || cpu_model  == PCM::SNOWRIDGE
             || cpu_model == PCM::SPR
             || cpu_model == PCM::EMR
+            || cpu_model == PCM::SRF
         );
     }
 
@@ -3738,6 +3781,7 @@ class SystemCounterState : public SocketCounterState
     friend class PCM;
     friend std::vector<uint64> getPCICFGEvent(const PCM::RawEventEncoding& eventEnc, const SystemCounterState& before, const SystemCounterState& after);
     friend std::vector<uint64> getMMIOEvent(const PCM::RawEventEncoding& eventEnc, const SystemCounterState& before, const SystemCounterState& after);
+    friend std::vector<uint64> getPMTEvent(const PCM::RawEventEncoding& eventEnc, const SystemCounterState& before, const SystemCounterState& after);
 
     std::vector<std::vector<uint64> > incomingQPIPackets; // each 64 byte
     std::vector<std::vector<uint64> > outgoingQPIFlits; // idle or data/non-data flits depending on the architecture
@@ -3745,6 +3789,7 @@ class SystemCounterState : public SocketCounterState
     uint64 uncoreTSC;
     std::unordered_map<PCM::RawEventEncoding, std::vector<uint64> , PCM::PCICFGRegisterEncodingHash, PCM::PCICFGRegisterEncodingCmp> PCICFGValues{};
     std::unordered_map<PCM::RawEventEncoding, std::vector<uint64>, PCM::MMIORegisterEncodingHash, PCM::MMIORegisterEncodingCmp> MMIOValues{};
+    std::unordered_map<PCM::RawEventEncoding, std::vector<uint64>, PCM::PMTRegisterEncodingHash2> PMTValues{};
 
 protected:
     void readAndAggregate(std::shared_ptr<SafeMsrHandle> handle)
@@ -5093,6 +5138,11 @@ inline std::vector<uint64> getPCICFGEvent(const PCM::RawEventEncoding & eventEnc
 inline std::vector<uint64> getMMIOEvent(const PCM::RawEventEncoding& eventEnc, const SystemCounterState& before, const SystemCounterState& after)
 {
     return getRegisterEvent(eventEnc, before.MMIOValues, after.MMIOValues);
+}
+
+inline std::vector<uint64> getPMTEvent(const PCM::RawEventEncoding& eventEnc, const SystemCounterState& before, const SystemCounterState& after)
+{
+    return getRegisterEvent(eventEnc, before.PMTValues, after.PMTValues);
 }
 
 template <class CounterStateType>

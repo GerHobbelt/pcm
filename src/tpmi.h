@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BSD-3-Clause
-// Copyright (c) 2023, Intel Corporation
+// Copyright (c) 2023-2024, Intel Corporation
 // written by Roman Dementiev
 //
 
@@ -21,6 +21,7 @@ public:
     virtual size_t getNumEntries() const = 0;
     virtual uint64 read64(size_t entryPos) = 0;
     virtual void write64(size_t entryPos, uint64 val) = 0;
+    virtual ~TPMIHandleInterface() {}
 };
 
 class TPMIHandle : public TPMIHandleInterface

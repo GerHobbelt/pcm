@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BSD-3-Clause
-// Copyright (c) 2009-2022, Intel Corporation
+// Copyright (c) 2009-2024, Intel Corporation
 // written by Roman Dementiev
 //            Otto Bruggeman
 //            Thomas Willhalm
@@ -1019,12 +1019,13 @@ class QATTelemetryVirtualCounterRegister : public HWRegister
 {
     std::shared_ptr<QATTelemetryVirtualGeneralConfigRegister> gConfigReg;
     std::shared_ptr<QATTelemetryVirtualControlRegister> controlReg;
-    int ctr_id;
+    // int ctr_id; // unused
 public:
-    QATTelemetryVirtualCounterRegister( std::shared_ptr<QATTelemetryVirtualGeneralConfigRegister> gConfigReg_, std::shared_ptr<QATTelemetryVirtualControlRegister> controlReg_, int ctr_id_) : 
+    QATTelemetryVirtualCounterRegister( std::shared_ptr<QATTelemetryVirtualGeneralConfigRegister> gConfigReg_,
+        std::shared_ptr<QATTelemetryVirtualControlRegister> controlReg_,
+        int /* ctr_id_ */ ) :
         gConfigReg(gConfigReg_),
-        controlReg(controlReg_),
-        ctr_id(ctr_id_)
+        controlReg(controlReg_)
     {
     }
     void operator = (uint64 /* val */) override
@@ -1969,26 +1970,31 @@ void PCM::initUncoreObjects()
         initUncorePMUsDirect();
     }
 
-    // TPMIHandle::setVerbose(true);
-    if (TPMIHandle::getNumInstances() == (size_t)num_sockets)
-    {
-        // std::cerr << "DEBUG: TPMIHandle::getNumInstances(): " << TPMIHandle::getNumInstances() << "\n";
-        UFSStatus.resize(num_sockets);
-        for (uint32 s = 0; s < (uint32)num_sockets; ++s)
+    //TPMIHandle::setVerbose(true);
+    try {
+        if (TPMIHandle::getNumInstances() == (size_t)num_sockets)
         {
-            try {
-                TPMIHandle h(s, UFS_ID, UFS_FABRIC_CLUSTER_OFFSET * sizeof(uint64));
-                // std::cerr << "DEBUG: Socket " << s << " dies: " << h.getNumEntries() << "\n";
-                for (size_t die = 0; die < h.getNumEntries(); ++die)
-                {
-                    const auto clusterOffset = extract_bits(h.read64(die), 0, 7);
-                    UFSStatus[s].push_back(std::make_shared<TPMIHandle>(s, UFS_ID, (clusterOffset + UFS_STATUS)* sizeof(uint64)));
-                }
-            } catch (std::exception & )
+            // std::cerr << "DEBUG: TPMIHandle::getNumInstances(): " << TPMIHandle::getNumInstances() << "\n";
+            UFSStatus.resize(num_sockets);
+            for (uint32 s = 0; s < (uint32)num_sockets; ++s)
             {
-                std::cerr << "ERROR: Could not open UFS TPMI register on socket " << s << ". Uncore frequency metrics will be unavailable.\n";
+                try {
+                    TPMIHandle h(s, UFS_ID, UFS_FABRIC_CLUSTER_OFFSET * sizeof(uint64));
+                    // std::cerr << "DEBUG: Socket " << s << " dies: " << h.getNumEntries() << "\n";
+                    for (size_t die = 0; die < h.getNumEntries(); ++die)
+                    {
+                        const auto clusterOffset = extract_bits(h.read64(die), 0, 7);
+                        UFSStatus[s].push_back(std::make_shared<TPMIHandle>(s, UFS_ID, (clusterOffset + UFS_STATUS)* sizeof(uint64)));
+                    }
+                } catch (std::exception & e)
+                {
+                    std::cerr << "ERROR: Could not open UFS TPMI register on socket " << s << ". Uncore frequency metrics will be unavailable. Exception details: " << e.what() << "\n";
+                }
             }
         }
+    } catch (std::exception & e)
+    {
+        std::cerr << "ERROR: Could not initialize TPMI. Uncore frequency metrics will be unavailable. Exception details: " << e.what() << "\n";
     }
 
     for (uint32 s = 0; s < (uint32)num_sockets; ++s)
@@ -4432,11 +4438,7 @@ std::string PCM::getCPUFamilyModelString(const uint32 cpu_family_, const uint32 
 {
     char buffer[sizeof(int)*4*3+6];
     std::fill(buffer, buffer + sizeof(buffer), 0);
-#ifdef _MSC_VER
-    sprintf_s(buffer,sizeof(buffer),"GenuineIntel-%d-%2X-%X", cpu_family_, cpu_model_, cpu_stepping_);
-#else
-    snprintf(buffer,sizeof(buffer),"GenuineIntel-%d-%2X-%X", cpu_family_, cpu_model_, cpu_stepping_);
-#endif
+    std::snprintf(buffer,sizeof(buffer),"GenuineIntel-%d-%2X-%X", cpu_family_, cpu_model_, cpu_stepping_);
     std::string result(buffer);
     return result;
 }
@@ -5713,6 +5715,7 @@ PCM::ErrorCode PCM::program(const RawPMUConfigs& curPMUConfigs_, const bool sile
     packageMSRConfig = RawPMUConfig{};
     pcicfgConfig = RawPMUConfig{};
     mmioConfig = RawPMUConfig{};
+    pmtConfig = RawPMUConfig{};
     RawPMUConfigs curPMUConfigs = curPMUConfigs_;
     constexpr auto globalRegPos = 0ULL;
     PCM::ExtendedCustomCoreEventDescription conf;
@@ -5736,7 +5739,11 @@ PCM::ErrorCode PCM::program(const RawPMUConfigs& curPMUConfigs_, const bool sile
         return true;
     };
     FixedEventControlRegister fixedReg;
-    auto setOtherConf = [&conf, &fixedReg, &globalRegPos](const RawPMUConfig& corePMUConfig)
+    auto setOtherConf = [&conf, &fixedReg
+#ifdef _MSC_VER
+        , &globalRegPos
+#endif
+            ](const RawPMUConfig& corePMUConfig)
     {
         if ((size_t)globalRegPos < corePMUConfig.programmable.size())
         {
@@ -5981,6 +5988,29 @@ PCM::ErrorCode PCM::program(const RawPMUConfigs& curPMUConfigs_, const bool sile
             };
             addLocations(mmioConfig.programmable);
             addLocations(mmioConfig.fixed);
+        }
+        else if (type == "pmt")
+        {
+            pmtConfig = pmuConfig.second;
+            auto addLocations = [this](const std::vector<RawEventConfig>& configs) {
+                for (const auto& c : configs)
+                {
+                    if (PMTRegisterLocations.find(c.first) == PMTRegisterLocations.end())
+                    {
+                        // add locations
+                        std::vector<PMTRegisterEncoding> locations;
+                        const auto UID = c.first[PMTEventPosition::UID];
+                        for (size_t inst = 0; inst < TelemetryArray::numInstances(UID); ++inst)
+                        {
+                            locations.push_back(std::make_shared<TelemetryArray>(UID, inst));
+                            // std::cout << "PMTRegisterLocations: UID: 0x" << std::hex << UID << " inst: " << std::dec << inst << std::endl;
+                        }
+                        PMTRegisterLocations[c.first] = locations;
+                    }
+                }
+            };
+            addLocations(pmtConfig.programmable);
+            addLocations(pmtConfig.fixed);
         }
         else if (type == "cxlcm")
         {
@@ -6466,6 +6496,44 @@ void PCM::readMMIORegisters(SystemCounterState& systemState)
     }
 }
 
+void PCM::readPMTRegisters(SystemCounterState& systemState)
+{
+    for (auto & p: PMTRegisterLocations)
+    {
+        for (auto & t: p.second)
+        {
+            if (t.get())
+            {
+                t->load();
+            }
+        }
+    }
+    auto read = [this, &systemState](const RawEventConfig& cfg) {
+        const RawEventEncoding& reEnc = cfg.first;
+        systemState.PMTValues[reEnc].clear();
+        const auto lsb = reEnc[PMTEventPosition::lsb];
+        const auto msb = reEnc[PMTEventPosition::msb];
+        const auto offset = reEnc[PMTEventPosition::offset];
+        // std::cout << "PMTValues: " << std::hex << reEnc[PMTEventPosition::UID] << std::dec << std::endl;
+        for (auto& reg : PMTRegisterLocations[reEnc])
+        {
+            if (reg.get())
+            {
+                systemState.PMTValues[reEnc].push_back(reg->get(offset, lsb, msb));
+                // std::cout << "PMTValues: " << std::hex << reEnc[PMTEventPosition::UID] << " " << std::dec << reg->get(offset, lsb, msb) << std::endl;
+            }
+        }
+    };
+    for (const auto& cfg : pmtConfig.programmable)
+    {
+        read(cfg);
+    }
+    for (const auto& cfg : pmtConfig.fixed)
+    {
+        read(cfg);
+    }
+}
+
 void PCM::readQPICounters(SystemCounterState & result)
 {
         // read QPI counters
@@ -6671,6 +6739,7 @@ void PCM::getAllCounterStates(SystemCounterState & systemState, std::vector<Sock
         readQPICounters(systemState);
         readPCICFGRegisters(systemState);
         readMMIORegisters(systemState);
+        readPMTRegisters(systemState);
     }
 
     for (auto & ar : asyncCoreResults)
