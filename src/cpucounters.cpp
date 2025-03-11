@@ -724,6 +724,7 @@ void PCM::initCStateSupportTables()
         case RPL:
         case MTL:
         case LNL:
+        case ARL:
         case SNOWRIDGE:
         case ELKHART_LAKE:
         case JASPER_LAKE:
@@ -803,6 +804,7 @@ void PCM::initCStateSupportTables()
         case RPL:
         case MTL:
         case LNL:
+        case ARL:
         case SNOWRIDGE:
         case ELKHART_LAKE:
         case JASPER_LAKE:
@@ -1253,9 +1255,9 @@ bool PCM::discoverSystemTopology()
         pi = (PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX)slpi;
         if (pi->Relationship == RelationProcessorCore)
         {
-            threads_per_core = (pi->Processor.Flags == LTP_PC_SMT) ? 2 : 1;
-            // std::cout << "thr per core: " << threads_per_core << "\n";
-            num_cores += threads_per_core;
+            const auto current_threads_per_core = (pi->Processor.Flags == LTP_PC_SMT) ? 2 : 1;
+            // std::cout << "thr per core: " << current_threads_per_core << "\n";
+            num_cores += current_threads_per_core;
         }
     }
     // std::cout << std::flush;
@@ -1370,8 +1372,6 @@ bool PCM::discoverSystemTopology()
             return false;
         }
 
-        if (entry.socket_id == 0 && entry.core_id == 0) ++threads_per_core;
-
         topology.push_back(entry);
         socketIdMap[entry.socket_id] = 0;
     }
@@ -1424,7 +1424,6 @@ bool PCM::discoverSystemTopology()
         socketIdMap[entries[i].socket_id] = 0;
         if(entries[i].os_id >= 0)
         {
-            if(entries[i].core_id == 0 && entries[i].socket_id == 0) ++threads_per_core;
             if (populateHybridEntry(entries[i], i) == false)
             {
                 return false;
@@ -1442,29 +1441,19 @@ bool PCM::discoverSystemTopology()
     }
     if(num_sockets == 0) {
         num_sockets = (int32)(std::max)(socketIdMap.size(), (size_t)1);
+        // std::cerr << " num_sockets = " << num_sockets << "\n";
     }
 
     socketIdMap_type::iterator s = socketIdMap.begin();
     for (uint32 sid = 0; s != socketIdMap.end(); ++s)
     {
         s->second = sid++;
-        // first is apic id, second is logical socket id
-        systemTopology->addSocket( s->first, s->second );
     }
-
-    for (int32 cid = 0; cid < num_cores; ++cid)
-    {
-        //std::cerr << "Cid: " << cid << "\n";
-        systemTopology->addThread( cid, topology[cid] );
-    }
-
-    // All threads are here now so we can set the refCore for a socket
-    for ( auto& socket : systemTopology->sockets() )
-        socket->setRefCore();
 
     // use map to change apic socket id to the logical socket id
     for (int i = 0; (i < (int)num_cores) && (!socketIdMap.empty()); ++i)
     {
+        // std::cerr << "socket_id: " << topology[i].socket_id << ", socketIdMap tells me: " << socketIdMap[topology[i].socket_id] << "\n";
         if(isCoreOnline((int32)i))
           topology[i].socket_id = socketIdMap[topology[i].socket_id];
     }
@@ -1481,13 +1470,29 @@ bool PCM::discoverSystemTopology()
     {
         for (int i = 0; i < (int)num_cores; ++i)
         {
-            if (topology[i].socket_id == topology[0].socket_id && topology[i].core_id == topology[0].core_id)
+            if (topology[i].isSameCore( topology[0] ))
                 ++threads_per_core;
         }
         assert(threads_per_core != 0);
     }
     if(num_phys_cores_per_socket == 0 && num_cores == num_online_cores) num_phys_cores_per_socket = num_cores / num_sockets / threads_per_core;
     if(num_online_cores == 0) num_online_cores = num_cores;
+
+    s = socketIdMap.begin();
+    for (; s != socketIdMap.end(); ++s)
+    {
+        systemTopology->addSocket( s->second );
+    }
+
+    for (int32 cid = 0; cid < num_cores; ++cid)
+    {
+        //std::cerr << "Cid: " << cid << "\n";
+        systemTopology->addThread( cid, topology[cid] );
+    }
+
+    // All threads are here now so we can set the refCore for a socket
+    for ( auto& socket : systemTopology->sockets() )
+        socket->setRefCore();
 
     int32 i = 0;
 
@@ -1662,6 +1667,7 @@ bool PCM::detectNominalFrequency()
                || cpu_family_model == RPL
                || cpu_family_model == MTL
                || cpu_family_model == LNL
+               || cpu_family_model == ARL
                || cpu_family_model == SKX
                || cpu_family_model == ICX
                || cpu_family_model == SPR
@@ -1745,6 +1751,12 @@ void PCM::initEnergyMonitoring()
             new CounterWidthExtender::MsrHandleCounter(MSR[socketRefCore[0]], MSR_PP0_ENERGY_STATUS), 32, 10000));
         pp_energy_status.push_back(std::make_shared<CounterWidthExtender>(
             new CounterWidthExtender::MsrHandleCounter(MSR[socketRefCore[0]], MSR_PP1_ENERGY_STATUS), 32, 10000));
+    }
+
+    if (systemEnergyMetricAvailable() && MSR.size() && (system_energy_status.get() == nullptr))
+    {
+        system_energy_status = std::make_shared<CounterWidthExtender>(
+            new CounterWidthExtender::MsrHandleCounter(MSR[socketRefCore[0]], MSR_SYS_ENERGY_STATUS, 0x00000000FFFFFFFF), 32, 10000);
     }
 }
 
@@ -1926,6 +1938,7 @@ void PCM::initUncoreObjects()
            case RPL: // TGLClientBW works fine for RPL
            case MTL: // TGLClientBW works fine for MTL
            case LNL: // TGLClientBW works fine for LNL
+           case ARL: // TGLClientBW works fine for ARL
                clientBW = std::make_shared<TGLClientBW>();
                break;
 /*         Disabled since ADLClientBW requires 2x multiplier for BW on top
@@ -2666,7 +2679,7 @@ void PCM::initUncorePMUsDirect()
                         std::hex << devInfo.func << "/telemetry/control";                    
                     qatTLMCTLStr = readSysFS(qat_TLMCTL_sysfs_path.str().c_str(), true);
                     if(!qatTLMCTLStr.size()){
-                        std::cout << "Warning: IDX - QAT telemetry feature of B:0x" << std::hex << devInfo.bus << ",D:0x" << devInfo.dev << ",F:0x" << devInfo.func \
+                        std::cerr << "Warning: IDX - QAT telemetry feature of B:0x" << std::hex << devInfo.bus << ",D:0x" << devInfo.dev << ",F:0x" << devInfo.func \
                             << " is NOT available, skipped." << std::dec << std::endl;
                         continue;
                     }
@@ -2858,7 +2871,14 @@ void PCM::initUncorePMUsDirect()
                             uncorePMUDiscovery->getNumBoxes(SPR_CXLDP_BOX_TYPE, s));
                         for (size_t pos = 0; pos < n_units; ++pos)
                         {
-                            cxlPMUs[s].push_back(std::make_pair(createCXLPMU(s, SPR_CXLCM_BOX_TYPE, pos), createCXLPMU(s, SPR_CXLDP_BOX_TYPE, pos)));
+                            try
+                            {
+                                cxlPMUs[s].push_back(std::make_pair(createCXLPMU(s, SPR_CXLCM_BOX_TYPE, pos), createCXLPMU(s, SPR_CXLDP_BOX_TYPE, pos)));
+                            }
+                            catch (const std::exception& e)
+                            {
+                                std::cerr << "CXL PMU initialization for socket " << s << " at position " << pos << " failed: " << e.what() << std::endl;
+                            }
                         }
                     }
                     break;
@@ -3327,6 +3347,7 @@ bool PCM::isCPUModelSupported(const int model_)
             || model_ == RPL
             || model_ == MTL
             || model_ == LNL
+            || model_ == ARL
             || model_ == SKX
             || model_ == ICX
             || model_ == SPR
@@ -3359,6 +3380,9 @@ bool PCM::checkModel()
             break;
         case CML_1:
             cpu_family_model = CML;
+            break;
+        case ARL_1:
+            cpu_family_model = ARL;
             break;
         case ICL_1:
             cpu_family_model = ICL;
@@ -3400,11 +3424,11 @@ void PCM::destroyMSR()
 
 PCM::~PCM()
 {
+    deleteAndNullify(systemTopology);
     if (instance)
     {
         destroyMSR();
         instance = NULL;
-        deleteAndNullify(systemTopology);
     }
 }
 
@@ -3503,7 +3527,12 @@ PCM::ErrorCode PCM::program(const PCM::ProgramMode mode_, const void * parameter
         canUsePerf = false;
         if (!silent) std::cerr << "Installed Linux kernel perf does not support hardware top-down level-1 counters. Using direct PMU programming instead.\n";
     }
-    if (canUsePerf && (cpu_family_model == ADL || cpu_family_model == RPL || cpu_family_model == MTL || cpu_family_model == LNL))
+    if (canUsePerf &&    (cpu_family_model == ADL
+                       || cpu_family_model == RPL
+                       || cpu_family_model == MTL
+                       || cpu_family_model == LNL
+                       || cpu_family_model == ARL
+                         ))
     {
         canUsePerf = false;
         if (!silent) std::cerr << "Linux kernel perf rejects an architectural event on your platform. Using direct PMU programming instead.\n";
@@ -3591,6 +3620,7 @@ PCM::ErrorCode PCM::program(const PCM::ProgramMode mode_, const void * parameter
             case RPL:
             case MTL:
             case LNL:
+            case ARL:
                 LLCArchEventInit(hybridAtomEventDesc);
                 hybridAtomEventDesc[2].event_number = SKL_MEM_LOAD_RETIRED_L2_MISS_EVTNR;
                 hybridAtomEventDesc[2].umask_value = SKL_MEM_LOAD_RETIRED_L2_MISS_UMASK;
@@ -4636,7 +4666,7 @@ void PCM::disableForceRTMAbortMode(const bool silent)
     }
 }
 
-bool PCM::isForceRTMAbortModeAvailable() const
+bool PCM::isForceRTMAbortModeAvailable()
 {
     PCM_CPUID_INFO info;
     pcm_cpuid(7, 0, info); // leaf 7, subleaf 0
@@ -4950,6 +4980,8 @@ const char * PCM::getUArchCodename(const int32 cpu_family_model_param) const
             return "Meteor Lake";
         case LNL:
             return "Lunar Lake";
+        case ARL:
+            return "Arrow Lake";
         case SKX:
             if (cpu_family_model_param >= 0)
             {
@@ -6335,6 +6367,7 @@ SystemCounterState PCM::getSystemCounterState()
 
         readAndAggregateCXLCMCounters(result);
         readQPICounters(result);
+        readSystemEnergyStatus(result);
 
         result.ThermalHeadroom = static_cast<int32>(PCM_INVALID_THERMAL_HEADROOM); // not available for system
     }
@@ -6941,6 +6974,16 @@ void PCM::getAllCounterStates(SystemCounterState & systemState, std::vector<Sock
         // aggregate socket uncore iMC, energy and package C state counters into system
         systemState += socketStates[s];
     }
+
+    readSystemEnergyStatus(systemState);
+}
+
+void PCM::readSystemEnergyStatus(SystemCounterState & systemState)
+{
+    if (systemEnergyMetricAvailable() && system_energy_status.get() != nullptr)
+    {
+        systemState.systemEnergyStatus = system_energy_status->read();
+    }
 }
 
 void PCM::getUncoreCounterStates(SystemCounterState & systemState, std::vector<SocketCounterState> & socketStates)
@@ -6964,6 +7007,7 @@ void PCM::getUncoreCounterStates(SystemCounterState & systemState, std::vector<S
     }
 
     readQPICounters(systemState);
+    readSystemEnergyStatus(systemState);
 
     for (int32 s = 0; s < num_sockets; ++s)
     {

@@ -810,6 +810,7 @@ private:
     std::vector<std::shared_ptr<CounterWidthExtender> > energy_status;
     std::vector<std::shared_ptr<CounterWidthExtender> > dram_energy_status;
     std::vector<std::shared_ptr<CounterWidthExtender> > pp_energy_status;
+    std::shared_ptr<CounterWidthExtender> system_energy_status;
     std::vector<std::vector<std::pair<UncorePMU, UncorePMU>>> cxlPMUs; // socket X CXL ports X UNIT {0,1}
 
     std::vector<std::shared_ptr<CounterWidthExtender> > memory_bw_local;
@@ -1216,6 +1217,7 @@ private:
     template <class CounterStateType>
     void readMSRs(std::shared_ptr<SafeMsrHandle> msr, const RawPMUConfig & msrConfig, CounterStateType & result);
     void readQPICounters(SystemCounterState & counterState);
+    void readSystemEnergyStatus(SystemCounterState & systemState);
     void readPCICFGRegisters(SystemCounterState& result);
     void readMMIORegisters(SystemCounterState& result);
     void readPMTRegisters(SystemCounterState& result);
@@ -1639,6 +1641,7 @@ public:
             case RPL:
             case MTL:
             case LNL:
+            case ARL:
                 if (topology[coreID].core_type == TopologyEntry::Atom)
                 {
                     return std::make_pair(OFFCORE_RESPONSE_0_EVTNR, event + 1);
@@ -1655,6 +1658,7 @@ public:
        case RPL:
        case MTL:
        case LNL:
+       case ARL:
            useGLCOCREvent = true;
            break;
        }
@@ -1892,6 +1896,8 @@ public:
         RPL_3 =         PCM_CPU_FAMILY_MODEL(6, 0xbe),
         MTL =           PCM_CPU_FAMILY_MODEL(6, 0xAA),
         LNL =           PCM_CPU_FAMILY_MODEL(6, 0xBD),
+        ARL =           PCM_CPU_FAMILY_MODEL(6, 197),
+        ARL_1 =         PCM_CPU_FAMILY_MODEL(6, 198),
         BDX =           PCM_CPU_FAMILY_MODEL(6, 79),
         KNL =           PCM_CPU_FAMILY_MODEL(6, 87),
         SKL =           PCM_CPU_FAMILY_MODEL(6, 94),
@@ -2128,6 +2134,7 @@ public:
         case MTL:
             return 6;
         case LNL:
+        case ARL:
             return 12;
         case SNOWRIDGE:
         case ELKHART_LAKE:
@@ -2405,7 +2412,7 @@ public:
     void disableForceRTMAbortMode(const bool silent = false);
 
     //! \brief queries availability of "force all RTM transaction abort" mode
-    bool isForceRTMAbortModeAvailable() const;
+    static bool isForceRTMAbortModeAvailable();
 
     //! \brief Get microcode level (returns -1 if retrieval not supported due to some restrictions)
     int64 getCPUMicrocodeLevel() const { return cpu_microcode_level; }
@@ -2477,6 +2484,7 @@ public:
                  || cpu_family_model == PCM::RPL
                  || cpu_family_model == PCM::MTL
                  || cpu_family_model == PCM::LNL
+                 || cpu_family_model == PCM::ARL
                  || cpu_family_model == PCM::SPR
                  || cpu_family_model == PCM::EMR
                  || cpu_family_model == PCM::GNR
@@ -2502,6 +2510,25 @@ public:
           || cpu_family_model == PCM::SRF
           || cpu_family_model == PCM::GRR
           );
+    }
+
+    bool systemEnergyMetricAvailable() const
+    {
+        return (
+               useSKLPath()
+            || cpu_family_model == PCM::SKX
+            || cpu_family_model == PCM::ICX
+            || cpu_family_model == PCM::ADL
+            || cpu_family_model == PCM::RPL
+            || cpu_family_model == PCM::MTL
+            || cpu_family_model == PCM::LNL
+            || cpu_family_model == PCM::ARL
+            || cpu_family_model == PCM::SPR
+            || cpu_family_model == PCM::EMR
+            || cpu_family_model == PCM::GNR
+            || cpu_family_model == PCM::SRF
+            || cpu_family_model == PCM::GRR
+            );
     }
 
     bool packageThermalMetricsAvailable() const
@@ -2789,6 +2816,7 @@ public:
             || cpu_family_model == RPL
             || cpu_family_model == MTL
             || cpu_family_model == LNL
+            || cpu_family_model == ARL
             || useSKLPath()
             ;
     }
@@ -3361,6 +3389,25 @@ uint64 getConsumedEnergy(const int powerPlane, const CounterStateType& before, c
     return after.PPEnergyStatus[powerPlane] - before.PPEnergyStatus[powerPlane];
 }
 
+/*!  \brief Returns energy consumed by system
+    \param before CPU counter state before the experiment
+    \param after CPU counter state after the experiment
+*/
+template <class CounterStateType>
+uint64 getSystemConsumedEnergy(const CounterStateType& before, const CounterStateType& after)
+{
+    return after.systemEnergyStatus - before.systemEnergyStatus;
+}
+
+/*!  \brief Checks is systemEnergyStatusValid is valid in the state
+*   \param s CPU counter state
+*/
+template <class CounterStateType>
+bool systemEnergyStatusValid(const CounterStateType& s)
+{
+    return s.systemEnergyStatus != 0;
+}
+
 /*!  \brief Returns energy consumed by DRAM (measured in internal units)
     \param before CPU counter state before the experiment
     \param after CPU counter state after the experiment
@@ -3426,6 +3473,31 @@ double getConsumedJoules(const int powerPlane, const CounterStateType& before, c
     if (!m) return -1.;
 
     return double(getConsumedEnergy(powerPlane, before, after)) * m->getJoulesPerEnergyUnit();
+}
+
+/*!  \brief Returns Joules consumed by system
+    \param before CPU counter state before the experiment
+    \param after CPU counter state after the experiment
+*/
+template <class CounterStateType>
+double getSystemConsumedJoules(const CounterStateType& before, const CounterStateType& after)
+{
+    PCM* m = PCM::getInstance();
+    if (!m) return -1.;
+
+    auto unit = m->getJoulesPerEnergyUnit();
+
+    switch (m->getCPUFamilyModel())
+    {
+           case PCM::SPR:
+           case PCM::EMR:
+           case PCM::GNR:
+           case PCM::SRF:
+                   unit = 1.0;
+                   break;
+    }
+
+    return double(getSystemConsumedEnergy(before, after)) * unit;
 }
 
 /*!  \brief Returns Joules consumed by DRAM
@@ -3853,11 +3925,14 @@ class SystemCounterState : public SocketCounterState
     friend std::vector<uint64> getPCICFGEvent(const PCM::RawEventEncoding& eventEnc, const SystemCounterState& before, const SystemCounterState& after);
     friend std::vector<uint64> getMMIOEvent(const PCM::RawEventEncoding& eventEnc, const SystemCounterState& before, const SystemCounterState& after);
     friend std::vector<uint64> getPMTEvent(const PCM::RawEventEncoding& eventEnc, const SystemCounterState& before, const SystemCounterState& after);
+    template <class CounterStateType> friend bool systemEnergyStatusValid(const CounterStateType& s);
+    template <class CounterStateType> friend uint64 getSystemConsumedEnergy(const CounterStateType& before, const CounterStateType& after);
 
     std::vector<std::vector<uint64> > incomingQPIPackets; // each 64 byte
     std::vector<std::vector<uint64> > outgoingQPIFlits; // idle or data/non-data flits depending on the architecture
     std::vector<std::vector<uint64> > TxL0Cycles;
     uint64 uncoreTSC;
+    uint64 systemEnergyStatus;
     std::unordered_map<PCM::RawEventEncoding, std::vector<uint64> , PCM::PCICFGRegisterEncodingHash, PCM::PCICFGRegisterEncodingCmp> PCICFGValues{};
     std::unordered_map<PCM::RawEventEncoding, std::vector<uint64>, PCM::MMIORegisterEncodingHash, PCM::MMIORegisterEncodingCmp> MMIOValues{};
     std::unordered_map<PCM::RawEventEncoding, std::vector<uint64>, PCM::PMTRegisterEncodingHash2> PMTValues{};
@@ -3883,7 +3958,8 @@ public:
     friend uint64 getOutgoingQPILinkBytes(uint32 socketNr, uint32 linkNr, const SystemCounterState & now);
 
     SystemCounterState() :
-        uncoreTSC(0)
+        uncoreTSC(0),
+        systemEnergyStatus(0)
     {
         PCM * m = PCM::getInstance();
         accel_counters.resize(m->getNumberofAccelCounters());
@@ -3915,6 +3991,7 @@ public:
 
         return *this;
     }
+
     virtual ~ SystemCounterState() {}
 };
 
@@ -4298,6 +4375,7 @@ uint64 getL2CacheMisses(const CounterStateType & before, const CounterStateType 
         || cpu_family_model == PCM::RPL
         || cpu_family_model == PCM::MTL
         || cpu_family_model == PCM::LNL
+        || cpu_family_model == PCM::ARL
         ) {
         return after.Event[BasicCounterState::SKLL2MissPos] - before.Event[BasicCounterState::SKLL2MissPos];
     }
@@ -4413,6 +4491,7 @@ uint64 getL3CacheHitsSnoop(const CounterStateType & before, const CounterStateTy
         || cpu_family_model == PCM::RPL
         || cpu_family_model == PCM::MTL
         || cpu_family_model == PCM::LNL
+        || cpu_family_model == PCM::ARL
         )
     {
         const int64 misses = getL3CacheMisses(before, after);
