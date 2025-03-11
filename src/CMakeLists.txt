@@ -1,9 +1,12 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2022, Intel Corporation
 
+include(FindOpenSSL)
 
 # All pcm-* executables
 set(PROJECT_NAMES pcm pcm-numa pcm-latency pcm-power pcm-msr pcm-memory pcm-tsx pcm-pcie pcm-core pcm-iio pcm-lspci pcm-pcicfg pcm-mmio pcm-tpmi pcm-raw pcm-accel)
+
+set(MINIMUM_OPENSSL_VERSION 1.1.1)
 
 file(GLOB COMMON_SOURCES pcm-accel-common.cpp msr.cpp cpucounters.cpp pci.cpp mmio.cpp tpmi.cpp pmt.cpp bw.cpp utils.cpp topology.cpp debug.cpp threadpool.cpp uncore_pmu_discovery.cpp)
 
@@ -11,6 +14,23 @@ if (APPLE)
   file(GLOB UNUX_SOURCES dashboard.cpp)
 else()
   file(GLOB UNUX_SOURCES dashboard.cpp resctrl.cpp)
+endif()
+
+if (LINUX)
+    file(STRINGS "/etc/os-release" OS_RELEASE_CONTENTS)
+    foreach(LINE ${OS_RELEASE_CONTENTS})
+        if(LINE MATCHES "^ID=")
+            string(REGEX REPLACE "^ID=\"?\([a-zA-Z]+\)\"?" "\\1" OS_ID ${LINE})
+        endif()
+    endforeach()
+    message(STATUS "Detected Linux distribution: ${OS_ID}")
+endif()
+
+if(NOT DEFINED NO_ASAN)
+    if(OS_ID STREQUAL "centos")
+        set(NO_STATIC_LIBASAN 1)
+        message(STATUS "CentOS detected, using dynamic libasan")
+    endif()
 endif()
 
 if(UNIX)  # LINUX, FREE_BSD, APPLE
@@ -36,18 +56,36 @@ if(UNIX)  # LINUX, FREE_BSD, APPLE
 
     # libpcm.so
     add_library(PCM_SHARED SHARED pcm-core.cpp)
+    target_compile_options(PCM_SHARED PRIVATE -DPCM_SHARED_LIBRARY=1)
     # PCM_SILENT in Release* for pcm-core.cpp
     target_compile_definitions(PCM_SHARED PRIVATE
       $<$<CONFIG:Release>:PCM_SILENT>
       $<$<CONFIG:MinSizeRel>:PCM_SILENT>
       $<$<CONFIG:RelWithDebInfo>:PCM_SILENT>
     )
+
+    if(NO_ASAN)
+        set(PCM_DYNAMIC_ASAN "")
+        set(PCM_STATIC_ASAN "")
+    else()
+        if(NO_STATIC_LIBASAN)
+            message(STATUS "Using dynamic libasan")
+            set(PCM_DYNAMIC_ASAN "asan")
+            set(PCM_STATIC_ASAN "")
+        else()
+            set(PCM_DYNAMIC_ASAN "")
+            set(PCM_STATIC_ASAN "-static-libasan")
+            message(STATUS "Using static libasan")
+            message(STATUS "To use dynamic libasan, use -DNO_STATIC_LIBASAN=1 option (required for CentOS)")
+        endif()
+    endif()
+
     if(APPLE)
         add_subdirectory(MacMSRDriver)
         include_directories("${CMAKE_SOURCE_DIR}/src/MacMSRDriver") # target_include_directories doesn't work
         target_link_libraries(PCM_SHARED PRIVATE PCM_STATIC_SILENT PcmMsr Threads::Threads)
     else()
-        target_link_libraries(PCM_SHARED PRIVATE PCM_STATIC_SILENT Threads::Threads)
+        target_link_libraries(PCM_SHARED PRIVATE PCM_STATIC_SILENT Threads::Threads "${PCM_DYNAMIC_ASAN}")
     endif()
     set_target_properties(PCM_SHARED PROPERTIES OUTPUT_NAME pcm)
 endif()
@@ -60,14 +98,21 @@ if(MSVC)
     file(GLOB WINDOWS_SOURCES winpmem/winpmem.cpp windows/stdafx.cpp freegetopt/getopt.cpp)
     add_library(PCM_STATIC STATIC ${COMMON_SOURCES} ${WINDOWS_SOURCES})
     target_compile_definitions(PCM_STATIC PRIVATE UNICODE _UNICODE _CONSOLE)
-    target_compile_options(PCM_STATIC PRIVATE "/MT$<$<CONFIG:Debug>:d>")
+    if (NO_STATIC_MSVC_RUNTIME_LIBRARY)
+        set(PCM_MSVC_RUNTIME_LIBRARY_OPTIONS "")
+    else()
+        set(PCM_MSVC_RUNTIME_LIBRARY_OPTIONS "/MT$<$<CONFIG:Debug>:d>")
+        message(STATUS "Using static MSVC runtime library")
+        message(STATUS "To use default/dynamic MSVC runtime library, use -DNO_STATIC_MSVC_RUNTIME_LIBRARY=1 option")
+    endif()
+    target_compile_options(PCM_STATIC PRIVATE "${PCM_MSVC_RUNTIME_LIBRARY_OPTIONS}")
 
     # Graphical perfmon front-end: pcm-lib, pcm-service
     # Files: COMMON_FILES() + pcm-lib.cpp winpmem\winpmem.cpp dllmain.cpp
     file(GLOB PCM_LIB_SOURCES winpmem/winpmem.cpp dllmain.cpp pcm-lib.cpp )
     add_library(pcm-lib SHARED ${COMMON_SOURCES} ${PCM_LIB_SOURCES})
     target_compile_definitions(pcm-lib PRIVATE _WINDOWS _USRDLL PCM_EXPORTS _WINDLL _UNICODE UNICODE)
-    target_compile_options(pcm-lib PRIVATE "/MT$<$<CONFIG:Debug>:d>")
+    target_compile_options(pcm-lib PRIVATE "${PCM_MSVC_RUNTIME_LIBRARY_OPTIONS}")
 
     # Pcm-service files: PCM_SHARED + AssemblyInfo.cpp PCMInstaller.cpp PCMService.cpp
     file(GLOB PCM_SERVICE_SOURCES windows/PCMInstaller.cpp  windows/PCMService.cpp windows/AssemblyInfo.cpp winddows/utils.cpp)
@@ -133,8 +178,12 @@ foreach(PROJECT_NAME ${PROJECT_NAMES})
     add_executable(${PROJECT_NAME} ${PROJECT_FILE})
 
     if(MSVC)
-        target_compile_options(${PROJECT_NAME} PRIVATE "/MT$<$<CONFIG:Debug>:d>")
+        target_compile_options(${PROJECT_NAME} PRIVATE "${PCM_MSVC_RUNTIME_LIBRARY_OPTIONS}")
     endif(MSVC)
+
+    if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+        set_target_properties(${PROJECT_NAME} PROPERTIES LINK_FLAGS "${PCM_STATIC_ASAN}")
+    endif()
 
     # specific file for pcm-raw project
     if(${PROJECT_NAME} STREQUAL pcm-raw)
@@ -147,9 +196,14 @@ foreach(PROJECT_NAME ${PROJECT_NAMES})
       else()
         message(STATUS "Compiling with SSL support, requires libssl-dev or openssl-devel or libopenssl-devel or libopenssl-dev package installed")
         message(STATUS "To disable SSL support, use -DNO_SSL=1 option")
-        find_package(OpenSSL REQUIRED)
-        target_compile_options(${PROJECT_NAME} PRIVATE "-DUSE_SSL")
-        set(LIBS ${LIBS} OpenSSL::SSL OpenSSL::Crypto)
+        find_package(OpenSSL ${MINIMUM_OPENSSL_VERSION} QUIET)
+        if(OPENSSL_FOUND)
+          message(STATUS "OpenSSL version ${OPENSSL_VERSION} >= ${MINIMUM_OPENSSL_VERSION}, OpenSSL support enabled")
+          target_compile_options(${PROJECT_NAME} PRIVATE "-DUSE_SSL")
+          set(LIBS ${LIBS} OpenSSL::SSL OpenSSL::Crypto)
+        else()
+          message(STATUS "OpenSSL support has been disabled, the version is less than ${MINIMUM_OPENSSL_VERSION}")
+        endif()
       endif()
       file(READ pcm-sensor-server.service.in SENSOR_SERVICE_IN)
       string(REPLACE "@@CMAKE_INSTALL_SBINDIR@@" "${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_SBINDIR}" SENSOR_SERVICE "${SENSOR_SERVICE_IN}")

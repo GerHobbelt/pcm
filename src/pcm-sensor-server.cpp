@@ -401,6 +401,9 @@ private:
         printCounter( "L3 Cache Occupancy",       getL3CacheOccupancy   ( after ) );
         printCounter( "Invariant TSC",            getInvariantTSC       ( before, after ) );
         printCounter( "SMI Count",                getSMICount           ( before, after ) );
+
+        printCounter( "Core Frequency",           getActiveAverageFrequency ( before, after ) );
+
         endObject( JSONPrinter::DelimiterAndNewLine, END_OBJECT );
         //DBG( 2, "Invariant TSC before=", before.InvariantTSC, ", after=", after.InvariantTSC, ", difference=", after.InvariantTSC-before.InvariantTSC );
 
@@ -446,6 +449,11 @@ private:
         printCounter( "PP0 Joules Consumed",           getConsumedJoules      ( 0, before, after ) );
         printCounter( "PP1 Joules Consumed",           getConsumedJoules      ( 1, before, after ) );
         printCounter( "DRAM Joules Consumed",          getDRAMConsumedJoules  ( before, after ) );
+        auto uncoreFrequencies = getUncoreFrequencies( before, after );
+        for (size_t i = 0; i < uncoreFrequencies.size(); ++i)
+        {
+            printCounter( std::string("Uncore Frequency Die ") + std::to_string(i), uncoreFrequencies[i]);
+        }
         uint32 i = 0;
         for ( ; i < ( PCM::MAX_C_STATE ); ++i ) {
             std::stringstream s;
@@ -692,6 +700,8 @@ private:
         printCounter( "L3 Cache Occupancy",       getL3CacheOccupancy   ( after ) );
         printCounter( "Invariant TSC",            getInvariantTSC       ( before, after ) );
         printCounter( "SMI Count",                getSMICount           ( before, after ) );
+
+        printCounter( "Core Frequency",           getActiveAverageFrequency ( before, after ) );
         //DBG( 2, "Invariant TSC before=", before.InvariantTSC, ", after=", after.InvariantTSC, ", difference=", after.InvariantTSC-before.InvariantTSC );
 
         printCounter( "Thermal Headroom", after.getThermalHeadroom() );
@@ -734,6 +744,11 @@ private:
         printCounter( "PP0 Joules Consumed",           getConsumedJoules      ( 0, before, after ) );
         printCounter( "PP1 Joules Consumed",           getConsumedJoules      ( 1, before, after ) );
         printCounter( "DRAM Joules Consumed",          getDRAMConsumedJoules  ( before, after ) );
+        auto uncoreFrequencies = getUncoreFrequencies( before, after );
+        for (size_t i = 0; i < uncoreFrequencies.size(); ++i)
+        {
+            printCounter( std::string("Uncore Frequency Die ") + std::to_string(i), uncoreFrequencies[i]);
+        }
         uint32 i = 0;
         for ( ; i <= ( PCM::MAX_C_STATE ); ++i ) {
             std::stringstream s;
@@ -1017,6 +1032,7 @@ protected:
                 bytesReceived = SSL_read( ssl_, static_cast<void*>(inputBuffer_), SIZE * sizeof( char_type ) );
                 if ( 0 >= bytesReceived ) {
                     int sslError = SSL_get_error( ssl_, bytesReceived );
+                    ERR_print_errors_fp(stderr);
                     switch ( sslError ) {
                         case SSL_ERROR_WANT_READ:
                         case SSL_ERROR_WANT_WRITE:
@@ -2371,8 +2387,9 @@ std::string& compressLWSAndRemoveCR( std::string& line ) {
     }
 
     // Remove trailing '\r'
-    if ( line[line.size()-1] == '\r' )
+    if (!line.empty() && line.back() == '\r') {
         line.pop_back();
+    }
 
     return line;
 }
@@ -2712,7 +2729,7 @@ public:
     virtual ~HTTPServer() {
         pcf_->stop();
         std::this_thread::sleep_for( std::chrono::seconds(1) );
-        delete pcf_;
+        deleteAndNullify(pcf_);
     }
 
 public:
@@ -2847,7 +2864,7 @@ void HTTPServer::run() {
             connection = new HTTPConnection( this, clientSocketFD, clientAddress, callbackList_ );
         } catch ( std::exception& e ) {
             DBG( 3, "Exception caught while creating a HTTPConnection: " );
-	    if (connection) delete connection;
+	    if (connection) deleteAndNullify(connection);
             ::close( clientSocketFD );
             continue;
         }
@@ -2885,9 +2902,13 @@ public:
         // SSL too old on development machine, not available yet FIXME
         //OPENSSL_config(nullptr);
 
-        sslCTX_ = SSL_CTX_new( SSLv23_method() );
+        // We require 1.1.1 now so TLS_method is available but still 
+        // make sure minimum protocol is TSL1_VERSION below
+        sslCTX_ = SSL_CTX_new( TLS_method() );
         if ( nullptr == sslCTX_ )
             throw std::runtime_error( "Cannot create an SSL context" );
+        if( SSL_CTX_set_min_proto_version( sslCTX_, TLS1_VERSION ) != 1 )
+            throw std::runtime_error( "Cannot set minimum protocol to TSL1_VERSION" );
         if ( SSL_CTX_use_certificate_file( sslCTX_, certificateFile_.c_str(), SSL_FILETYPE_PEM ) <= 0 )
             throw std::runtime_error( "Cannot use certificate file" );
         if ( SSL_CTX_use_PrivateKey_file( sslCTX_, privateKeyFile_.c_str(), SSL_FILETYPE_PEM ) <= 0 )
@@ -2956,6 +2977,7 @@ void HTTPSServer::run() {
             }
         } catch( std::exception& e ) {
              DBG( 3, "SSL Accept: error accepting incoming connection, closing the FD and continuing: ", e.what() );
+             SSL_free( ssl ); // Free the SSL structure to prevent memory leaks
              ::close( clientSocketFD );
              continue;
         }
@@ -2966,6 +2988,7 @@ void HTTPSServer::run() {
         char const * resbuf = ::inet_ntop( AF_INET, &(clientAddress.sin_addr), ipbuf, INET_ADDRSTRLEN );
         if ( nullptr == resbuf ) {
             std::cerr << strerror( errno ) << "\n";
+            SSL_free( ssl ); // Free the SSL structure to prevent memory leaks
             ::close( clientSocketFD );
             continue;
         }

@@ -513,7 +513,7 @@ bool PCM::isRDTDisabled() const
             flag = 0;
         }
 #ifdef _MSC_VER
-        free(env);
+        freeAndNullify(env);
 #endif
     }
     return flag > 0;
@@ -1204,7 +1204,7 @@ bool PCM::discoverSystemTopology()
 
     while (res == FALSE)
     {
-        delete[] slpi;
+        deleteAndNullifyArray(slpi);
 
         if (GetLastError() == ERROR_INSUFFICIENT_BUFFER)
         {
@@ -1263,7 +1263,7 @@ bool PCM::discoverSystemTopology()
         socketIdMap[entry.socket] = 0;
     }
 
-    delete[] base_slpi;
+    deleteAndNullifyArray(base_slpi);
 
 #else
     // for Linux, Mac OS, FreeBSD and DragonFlyBSD
@@ -1374,7 +1374,7 @@ bool PCM::discoverSystemTopology()
             return false;                                                                                  \
         }                                                                                                  \
         ret_value = convertUnknownToInt(size, pParam);                                                     \
-        free(pParam);                                                                                      \
+        freeAndNullify(pParam);                                                                            \
     }
 // End SAFE_SYSCTLBYNAME
 
@@ -3307,7 +3307,7 @@ PCM::~PCM()
     {
         destroyMSR();
         instance = NULL;
-        delete systemTopology;
+        deleteAndNullify(systemTopology);
     }
 }
 
@@ -7160,7 +7160,7 @@ PciHandleType * ServerUncorePMUs::createIntelPerfMonDevice(uint32 groupnr_, int3
 
         if(vendor_id == PCM_INTEL_PCI_VENDOR_ID) return handle;
 
-        delete handle;
+        deleteAndNullify(handle);
     }
     return NULL;
 }
@@ -8600,6 +8600,18 @@ ServerUncorePMUs::~ServerUncorePMUs()
 
 void ServerUncorePMUs::programServerUncoreMemoryMetrics(const ServerUncoreMemoryMetrics & metrics, const int rankA, const int rankB)
 {
+    switch (metrics)
+    {
+        case PartialWrites:
+        case Pmem:
+        case PmemMemoryMode:
+        case PmemMixedMode:
+            break;
+        default:
+            std::cerr << "PCM Error: unknown memory metrics: " << metrics << "\n";
+            return;
+    }
+
     PCM * pcm = PCM::getInstance();
     uint32 MCCntConfig[4] = {0,0,0,0};
     uint32 EDCCntConfig[4] = {0,0,0,0};
@@ -8695,13 +8707,21 @@ void ServerUncorePMUs::programServerUncoreMemoryMetrics(const ServerUncoreMemory
             }
         }
     } else {
+        if (rankA < 0 || rankA > 7)
+        {
+            std::cerr << "PCM Error: invalid rankA value: " << rankA << "\n";
+            return;
+        }
         switch(cpu_model)
         {
         case PCM::IVYTOWN:
             MCCntConfig[EventPosition::READ_RANK_A] = MC_CH_PCI_PMON_CTL_EVENT((0xb0 + rankA)) + MC_CH_PCI_PMON_CTL_UMASK(0xff); // RD_CAS_RANK(rankA) all banks
             MCCntConfig[EventPosition::WRITE_RANK_A] = MC_CH_PCI_PMON_CTL_EVENT((0xb8 + rankA)) + MC_CH_PCI_PMON_CTL_UMASK(0xff); // WR_CAS_RANK(rankA) all banks
-            MCCntConfig[EventPosition::READ_RANK_B] = MC_CH_PCI_PMON_CTL_EVENT((0xb0 + rankB)) + MC_CH_PCI_PMON_CTL_UMASK(0xff); // RD_CAS_RANK(rankB) all banks
-            MCCntConfig[EventPosition::WRITE_RANK_B] = MC_CH_PCI_PMON_CTL_EVENT((0xb8 + rankB)) + MC_CH_PCI_PMON_CTL_UMASK(0xff); // WR_CAS_RANK(rankB) all banks
+            if (rankB >= 0 && rankB <= 7)
+            {
+                MCCntConfig[EventPosition::READ_RANK_B] = MC_CH_PCI_PMON_CTL_EVENT((0xb0 + rankB)) + MC_CH_PCI_PMON_CTL_UMASK(0xff); // RD_CAS_RANK(rankB) all banks
+                MCCntConfig[EventPosition::WRITE_RANK_B] = MC_CH_PCI_PMON_CTL_EVENT((0xb8 + rankB)) + MC_CH_PCI_PMON_CTL_UMASK(0xff); // WR_CAS_RANK(rankB) all banks
+            }
             break;
         case PCM::HASWELLX:
         case PCM::BDX_DE:
@@ -8709,8 +8729,11 @@ void ServerUncorePMUs::programServerUncoreMemoryMetrics(const ServerUncoreMemory
         case PCM::SKX:
             MCCntConfig[EventPosition::READ_RANK_A] = MC_CH_PCI_PMON_CTL_EVENT((0xb0 + rankA)) + MC_CH_PCI_PMON_CTL_UMASK(16); // RD_CAS_RANK(rankA) all banks
             MCCntConfig[EventPosition::WRITE_RANK_A] = MC_CH_PCI_PMON_CTL_EVENT((0xb8 + rankA)) + MC_CH_PCI_PMON_CTL_UMASK(16); // WR_CAS_RANK(rankA) all banks
-            MCCntConfig[EventPosition::READ_RANK_B] = MC_CH_PCI_PMON_CTL_EVENT((0xb0 + rankB)) + MC_CH_PCI_PMON_CTL_UMASK(16); // RD_CAS_RANK(rankB) all banks
-            MCCntConfig[EventPosition::WRITE_RANK_B] = MC_CH_PCI_PMON_CTL_EVENT((0xb8 + rankB)) + MC_CH_PCI_PMON_CTL_UMASK(16); // WR_CAS_RANK(rankB) all banks
+            if (rankB >= 0 && rankB <= 7)
+            {
+                MCCntConfig[EventPosition::READ_RANK_B] = MC_CH_PCI_PMON_CTL_EVENT((0xb0 + rankB)) + MC_CH_PCI_PMON_CTL_UMASK(16); // RD_CAS_RANK(rankB) all banks
+                MCCntConfig[EventPosition::WRITE_RANK_B] = MC_CH_PCI_PMON_CTL_EVENT((0xb8 + rankB)) + MC_CH_PCI_PMON_CTL_UMASK(16); // WR_CAS_RANK(rankB) all banks
+            }
             break;
         case PCM::KNL:
             MCCntConfig[EventPosition::READ] = MC_CH_PCI_PMON_CTL_EVENT(0x03) + MC_CH_PCI_PMON_CTL_UMASK(1);  // monitor reads on counter 0: CAS.RD
@@ -9742,7 +9765,7 @@ PciHandleType * getDeviceHandle(uint32 vendorId, uint32 deviceId)
                         const uint32 did = (value >> 16) & 0xffff;
                         if (vid == vendorId && did == deviceId)
                             return h;
-                        delete h;
+                        deleteAndNullify(h);
                     }
                 }
             }
@@ -9792,7 +9815,7 @@ uint32 PCM::getMaxNumOfCBoxesInternal() const
                 num = (uint32)weight32(value);
                 h->read32(0xa0, &value);
                 num += (uint32)weight32(value);
-                delete h;
+                deleteAndNullify(h);
             }
             else
             {
@@ -10457,8 +10480,8 @@ CounterWidthExtender::CounterWidthExtender(AbstractRawCounter * raw_counter_, ui
 }
 CounterWidthExtender::~CounterWidthExtender()
 {
-    delete UpdateThread;
-    if (raw_counter) delete raw_counter;
+    deleteAndNullify(UpdateThread);
+    deleteAndNullify(raw_counter);
 }
 
 
