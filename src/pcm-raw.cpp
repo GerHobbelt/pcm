@@ -222,7 +222,9 @@ bool initPMUEventMap()
     if (!in.is_open())
     {
         cerr << "ERROR: File " << mapfilePath << " can't be open. \n";
-        cerr << "       Download it from https://raw.githubusercontent.com/intel/perfmon/main/" << mapfile << " \n";
+        cerr << "       Use -ep <pcm_source_directory>/perfmon option if you cloned PCM source repository recursively with submodules,\n";
+        cerr << "       or run 'git clone https://github.com/intel/perfmon' to download the perfmon event repository and use -ep <perfmon_directory> option\n";
+        cerr << "       or download the file from https://raw.githubusercontent.com/intel/perfmon/main/" << mapfile << " \n";
         return false;
     }
     int32 FMSPos = -1;
@@ -561,13 +563,14 @@ AddEventStatus addEventFromDB(PCM::RawPMUConfigs& curPMUConfigs, string fullEven
             std::ifstream in(path);
             if (!in.is_open())
             {
-                const auto alt_path = std::string("/usr/share/pcm/") + path;
+                const auto alt_path = getInstallPathPrefix() + path;
                 in.open(alt_path);
                 if (!in.is_open())
                 {
                     err_msg = std::string("event file ") + path + " or " + alt_path + " is not available.";
                     throw std::invalid_argument(err_msg);
                 }
+                path = alt_path;
             }
             in.close();
             break;

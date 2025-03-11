@@ -1248,6 +1248,7 @@ private:
                 {
                 case SPR:
                 case EMR:
+                case GNR:
                 case SRF:
                     *ctrl = *curEvent;
                     break;
@@ -1304,6 +1305,8 @@ public:
                 (
                     SPR == cpu_model
                 ||  EMR == cpu_model
+                ||  GNR == cpu_model
+                ||  GNR_D == cpu_model
                 );
     }
 
@@ -1441,6 +1444,12 @@ public:
         VTune or PTU measurements invalid. VTune or PTU measurement may make measurement with this code invalid. Please enable either usage of these routines or VTune/PTU/etc.
     */
     ErrorCode program(const ProgramMode mode_ = DEFAULT_EVENTS, const void * parameter_ = NULL, const bool silent = false, const int pid = -1); // program counters and start counting
+
+    /*! \brief checks the error without side effects.
+        \throw std::system_error generic_category exception with PCM error code.
+        \param code error code from the 'program' call
+    */
+    void checkStatus(const ErrorCode status);
 
     /*! \brief checks the error and suggests solution and/or exits the process
         \param code error code from the 'program' call
@@ -1627,6 +1636,7 @@ public:
             case ADL:
             case RPL:
             case MTL:
+            case LNL:
                 if (topology[coreID].core_type == TopologyEntry::Atom)
                 {
                     return std::make_pair(OFFCORE_RESPONSE_0_EVTNR, event + 1);
@@ -1642,6 +1652,7 @@ public:
        case ADL: // ADL big core (GLC)
        case RPL:
        case MTL:
+       case LNL:
            useGLCOCREvent = true;
            break;
        }
@@ -1867,6 +1878,7 @@ public:
         RPL_2 = 0xbf,
         RPL_3 = 0xbe,
         MTL = 0xAA,
+        LNL = 0xBD,
         BDX = 79,
         KNL = 87,
         SKL = 94,
@@ -1875,7 +1887,9 @@ public:
         ICX = 106,
         SPR = 143,
         EMR = 207,
+        GNR = 173,
         SRF = 175,
+        GNR_D = 174,
         END_OF_MODEL_LIST = 0x0ffff
     };
 
@@ -1969,6 +1983,7 @@ public:
         case ICX:
         case SPR:
         case EMR:
+        case GNR:
         case SRF:
             return (serverUncorePMUs.size() && serverUncorePMUs[0].get()) ? (serverUncorePMUs[0]->getNumQPIPorts()) : 0;
         }
@@ -1995,6 +2010,7 @@ public:
         case ICX:
         case SPR:
         case EMR:
+        case GNR:
         case SRF:
         case BDX:
         case KNL:
@@ -2023,6 +2039,7 @@ public:
         case ICX:
         case SPR:
         case EMR:
+        case GNR:
         case SRF:
         case BDX:
         case KNL:
@@ -2054,6 +2071,7 @@ public:
         case ICX:
         case SPR:
         case EMR:
+        case GNR:
         case SRF:
         case BDX:
         case KNL:
@@ -2087,6 +2105,8 @@ public:
         case RPL:
         case MTL:
             return 6;
+        case LNL:
+            return 12;
         case SNOWRIDGE:
             return 4;
         case DENVERTON:
@@ -2114,6 +2134,7 @@ public:
             return 5;
         case SPR:
         case EMR:
+        case GNR:
         case SRF:
             return 6;
         }
@@ -2166,6 +2187,7 @@ public:
         case SNOWRIDGE:
         case SPR:
         case EMR:
+        case GNR:
         case SRF:
         case KNL:
             return true;
@@ -2426,8 +2448,10 @@ public:
                  || cpu_model == PCM::ADL
                  || cpu_model == PCM::RPL
                  || cpu_model == PCM::MTL
+                 || cpu_model == PCM::LNL
                  || cpu_model == PCM::SPR
                  || cpu_model == PCM::EMR
+                 || cpu_model == PCM::GNR
                  || cpu_model == PCM::SRF
                );
     }
@@ -2445,6 +2469,7 @@ public:
           || cpu_model == PCM::ICX
           || cpu_model == PCM::SPR
           || cpu_model == PCM::EMR
+          || cpu_model == PCM::GNR
           || cpu_model == PCM::SRF
           );
     }
@@ -2468,6 +2493,7 @@ public:
             ||  cpu_model == PCM::ICX
             ||  cpu_model == PCM::SPR
             ||  cpu_model == PCM::EMR
+            ||  cpu_model == PCM::GNR
             ||  cpu_model == PCM::SRF
             );
     }
@@ -2484,6 +2510,7 @@ public:
             ||  cpu_model == PCM::ICX
             ||  cpu_model == PCM::SPR
             ||  cpu_model == PCM::EMR
+            ||  cpu_model == PCM::GNR
             ||  cpu_model == PCM::SRF
                );
     }
@@ -2497,6 +2524,7 @@ public:
             || cpu_model == PCM::SPR
             || cpu_model == PCM::EMR
             || cpu_model == PCM::SRF
+            || cpu_model == PCM::GNR
             ;
     }
 
@@ -2509,6 +2537,7 @@ public:
     {
         return (
                cpu_model == PCM::SRF
+            || cpu_model == PCM::GNR
             );
     }
     
@@ -2545,10 +2574,11 @@ public:
         return (
                cpu_model == PCM::SKX
             || cpu_model == PCM::ICX
-	        || cpu_model  == PCM::SNOWRIDGE
+	        || cpu_model == PCM::SNOWRIDGE
             || cpu_model == PCM::SPR
             || cpu_model == PCM::EMR
             || cpu_model == PCM::SRF
+            || cpu_model == PCM::GNR
         );
     }
 
@@ -2557,6 +2587,7 @@ public:
         return MSR.empty() == false
                 && getMaxNumOfUncorePMUs(UBOX_PMU_ID) > 0ULL
                 && getNumCores() == getNumOnlineCores()
+                && PCM::GNR != cpu_model
                 && PCM::SRF != cpu_model
             ;
     }
@@ -2649,6 +2680,7 @@ public:
             || cpu_model == PCM::ICX
             || cpu_model == PCM::SPR
             || cpu_model == PCM::EMR
+            || cpu_model == PCM::GNR
             || cpu_model == PCM::SRF
             || cpu_model == PCM::BDX
             || cpu_model == PCM::KNL
@@ -2669,6 +2701,7 @@ public:
          || cpu_model_ == PCM::ICX
          || cpu_model_ == PCM::SPR
          || cpu_model_ == PCM::EMR
+         || cpu_model_ == PCM::GNR
          || cpu_model_ == PCM::SRF
                );
     }
@@ -2693,6 +2726,7 @@ public:
          || cpu_model == PCM::ICX
          || cpu_model == PCM::SPR
          || cpu_model == PCM::EMR
+         || cpu_model == PCM::GNR
          || cpu_model == PCM::SRF
                );
     }
@@ -2708,6 +2742,7 @@ public:
                || PCM::ICX == cpu_model
                || PCM::SPR == cpu_model
                || PCM::EMR == cpu_model
+               || PCM::GNR == cpu_model
                ;
     }
 
@@ -2720,6 +2755,7 @@ public:
             || cpu_model == ADL
             || cpu_model == RPL
             || cpu_model == MTL
+            || cpu_model == LNL
             || useSKLPath()
             ;
     }
@@ -3376,6 +3412,7 @@ double getDRAMConsumedJoules(const CounterStateType & before, const CounterState
         || PCM::BDX == cpu_model
         || PCM::SKX == cpu_model
         || PCM::ICX == cpu_model
+        || PCM::GNR == cpu_model
         || PCM::SRF == cpu_model
         || PCM::KNL == cpu_model
         ) {
@@ -4223,6 +4260,7 @@ uint64 getL2CacheMisses(const CounterStateType & before, const CounterStateType 
         || cpu_model == PCM::ADL
         || cpu_model == PCM::RPL
         || cpu_model == PCM::MTL
+        || cpu_model == PCM::LNL
         ) {
         return after.Event[BasicCounterState::SKLL2MissPos] - before.Event[BasicCounterState::SKLL2MissPos];
     }
@@ -4334,6 +4372,7 @@ uint64 getL3CacheHitsSnoop(const CounterStateType & before, const CounterStateTy
         || cpu_model == PCM::ADL
         || cpu_model == PCM::RPL
         || cpu_model == PCM::MTL
+        || cpu_model == PCM::LNL
         )
     {
         const int64 misses = getL3CacheMisses(before, after);
