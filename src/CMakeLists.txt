@@ -35,6 +35,10 @@ if(NOT PCM_NO_ASAN)
         set(PCM_NO_STATIC_LIBASAN ON)
         message(STATUS "CentOS detected, using dynamic libasan")
     endif()
+    if(OS_ID STREQUAL "arch")
+        set(PCM_NO_STATIC_LIBASAN ON)
+        message(STATUS "arch Linux detected, using dynamic libasan")
+    endif()
 endif()
 
 if(UNIX)  # LINUX, FREE_BSD, APPLE
@@ -56,7 +60,7 @@ if(UNIX)  # LINUX, FREE_BSD, APPLE
       $<$<CONFIG:RelWithDebInfo>:PCM_SILENT>
     )
 
-    target_compile_options(PCM_STATIC_SILENT PRIVATE "-fPIC")
+    set_target_properties(PCM_STATIC_SILENT PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
     # libpcm.so
     add_library(PCM_SHARED SHARED pcm-core.cpp)
@@ -80,7 +84,7 @@ if(UNIX)  # LINUX, FREE_BSD, APPLE
             set(PCM_DYNAMIC_ASAN "")
             set(PCM_STATIC_ASAN "-static-libasan")
             message(STATUS "Using static libasan")
-            message(STATUS "To use dynamic libasan, use -DPCM_NO_STATIC_LIBASAN=1 option (required for CentOS)")
+            message(STATUS "To use dynamic libasan, use -DPCM_NO_STATIC_LIBASAN=1 option (required for CentOS and arch Linux)")
         endif()
     endif()
 
@@ -88,8 +92,10 @@ if(UNIX)  # LINUX, FREE_BSD, APPLE
         add_subdirectory(MacMSRDriver)
         include_directories("${CMAKE_SOURCE_DIR}/src/MacMSRDriver") # target_include_directories doesn't work
         target_link_libraries(PCM_SHARED PRIVATE PCM_STATIC_SILENT PcmMsr Threads::Threads)
-    else()
+    elseif(LINUX)
         target_link_libraries(PCM_SHARED PRIVATE PCM_STATIC_SILENT Threads::Threads "${PCM_DYNAMIC_ASAN}")
+    else()
+        target_link_libraries(PCM_SHARED PRIVATE PCM_STATIC_SILENT Threads::Threads)
     endif()
     set_target_properties(PCM_SHARED PROPERTIES OUTPUT_NAME pcm)
 endif()

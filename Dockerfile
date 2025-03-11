@@ -1,13 +1,13 @@
-FROM fedora:40@sha256:5ce8497aeea599bf6b54ab3979133923d82aaa4f6ca5ced1812611b197c79eb0 as builder
+FROM fedora:41@sha256:3ec60eb34fa1a095c0c34dd37cead9fd38afb62612d43892fcf1d3425c32bc1e AS builder
 # Dockerfile for Intel PCM sensor server
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2020-2024 Intel Corporation
 
 RUN dnf -y install gcc-c++ git findutils make cmake openssl openssl-devel libasan libasan-static
 COPY . /tmp/pcm
-RUN cd /tmp/pcm && mkdir build && cd build && cmake .. && make -j
+RUN cd /tmp/pcm && mkdir build && cd build && cmake -DPCM_NO_STATIC_LIBASAN=OFF .. && make -j
 
-FROM fedora:40@sha256:5ce8497aeea599bf6b54ab3979133923d82aaa4f6ca5ced1812611b197c79eb0
+FROM fedora:41@sha256:3ec60eb34fa1a095c0c34dd37cead9fd38afb62612d43892fcf1d3425c32bc1e
 COPY --from=builder /tmp/pcm/build/bin/* /usr/local/bin/
 ENV PCM_NO_PERF=1
 

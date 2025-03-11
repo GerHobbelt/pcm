@@ -382,6 +382,7 @@ int32 PCM::getMaxCustomCoreEvents()
     return core_gen_counter_num_max;
 }
 
+/*
 int PCM::getCPUModelFromCPUID()
 {
     static int result = -1;
@@ -390,6 +391,21 @@ int PCM::getCPUModelFromCPUID()
         PCM_CPUID_INFO cpuinfo;
         pcm_cpuid(1, cpuinfo);
         result = (((cpuinfo.array[0]) & 0xf0) >> 4) | ((cpuinfo.array[0] & 0xf0000) >> 12);
+    }
+    return result;
+}
+*/
+
+int PCM::getCPUFamilyModelFromCPUID()
+{
+    static int result = -1;
+    if (result < 0)
+    {
+        PCM_CPUID_INFO cpuinfo;
+        pcm_cpuid(1, cpuinfo);
+        const auto cpu_family_ = (((cpuinfo.array[0]) >> 8) & 0xf) | ((cpuinfo.array[0] & 0xf00000) >> 16);
+        const auto cpu_model_ = (((cpuinfo.array[0]) & 0xf0) >> 4) | ((cpuinfo.array[0] & 0xf0000) >> 12);
+        result = PCM_CPU_FAMILY_MODEL(cpu_family_, cpu_model_);
     }
     return result;
 }
@@ -417,7 +433,8 @@ bool PCM::detectModel()
 
     pcm_cpuid(1, cpuinfo);
     cpu_family = (((cpuinfo.array[0]) >> 8) & 0xf) | ((cpuinfo.array[0] & 0xf00000) >> 16);
-    cpu_model = (((cpuinfo.array[0]) & 0xf0) >> 4) | ((cpuinfo.array[0] & 0xf0000) >> 12);
+    cpu_model_private = (((cpuinfo.array[0]) & 0xf0) >> 4) | ((cpuinfo.array[0] & 0xf0000) >> 12);
+    cpu_family_model = PCM_CPU_FAMILY_MODEL(cpu_family, cpu_model_private);
     cpu_stepping = cpuinfo.array[0] & 0x0f;
 
     if (cpuinfo.reg.ecx & (1UL << 31UL)) {
@@ -426,12 +443,6 @@ bool PCM::detectModel()
     }
 
     readCoreCounterConfig();
-
-    if (cpu_family != 6)
-    {
-        std::cerr << getUnsupportedMessage() << " CPU Family: " << cpu_family << "\n";
-        return false;
-    }
 
     pcm_cpuid(7, 0, cpuinfo);
 
@@ -486,7 +497,8 @@ bool PCM::detectModel()
     std::cerr << "STIBP supported          : " << ((cpuinfo.reg.edx & (1 << 27)) ? "yes" : "no") << "\n";
     std::cerr << "Spec arch caps supported : " << ((cpuinfo.reg.edx & (1 << 29)) ? "yes" : "no") << "\n";
     std::cerr << "Max CPUID level          : " << max_cpuid << "\n";
-    std::cerr << "CPU model number         : " << cpu_model << "\n";
+    std::cerr << "CPU family               : " << cpu_family << "\n";
+    std::cerr << "CPU model number         : " << cpu_model_private << "\n";
 
     return true;
 }
@@ -564,7 +576,7 @@ bool isMBMEnforced()
 
 bool PCM::CoreLocalMemoryBWMetricAvailable() const
 {
-    if (isMBMEnforced() == false && cpu_model == SKX && cpu_stepping < 5) return false; // SKZ4 errata
+    if (isMBMEnforced() == false && cpu_family_model == SKX && cpu_stepping < 5) return false; // SKZ4 errata
     PCM_CPUID_INFO cpuinfo;
     if (!(QOSMetricAvailable() && L3QOSMetricAvailable()))
             return false;
@@ -574,7 +586,7 @@ bool PCM::CoreLocalMemoryBWMetricAvailable() const
 
 bool PCM::CoreRemoteMemoryBWMetricAvailable() const
 {
-    if (isMBMEnforced() == false && cpu_model == SKX && cpu_stepping < 5) return false; // SKZ4 errata
+    if (isMBMEnforced() == false && cpu_family_model == SKX && cpu_stepping < 5) return false; // SKZ4 errata
     PCM_CPUID_INFO cpuinfo;
     if (!(QOSMetricAvailable() && L3QOSMetricAvailable()))
         return false;
@@ -640,14 +652,14 @@ void PCM::initRDT()
         MSR[core]->read(IA32_PQR_ASSOC, &msr_pqr_assoc);
         //std::cout << "initRMID reading IA32_PQR_ASSOC 0x" << std::hex << msr_pqr_assoc << std::dec << "\n";
 
-        //std::cout << "Socket Id : " << topology[core].socket;
+        //std::cout << "Socket Id : " << topology[core].socket_id;
         msr_pqr_assoc &= 0xffffffff00000000ULL;
-        msr_pqr_assoc |= (uint64)(rmid[topology[core].socket] & ((1ULL<<10)-1ULL));
+        msr_pqr_assoc |= (uint64)(rmid[topology[core].socket_id] & ((1ULL<<10)-1ULL));
         //std::cout << "initRMID writing IA32_PQR_ASSOC 0x" << std::hex << msr_pqr_assoc << std::dec << "\n";
         //Write 0xC8F MSR with new RMID for each core
         MSR[core]->write(IA32_PQR_ASSOC,msr_pqr_assoc);
 
-        msr_qm_evtsel = static_cast<uint64>(rmid[topology[core].socket] & ((1ULL<<10)-1ULL));
+        msr_qm_evtsel = static_cast<uint64>(rmid[topology[core].socket_id] & ((1ULL<<10)-1ULL));
         msr_qm_evtsel <<= 32;
         //Write 0xC8D MSR with new RMID for each core
         //std::cout << "initRMID writing IA32_QM_EVTSEL 0x" << std::hex << msr_qm_evtsel << std::dec << "\n";
@@ -663,7 +675,7 @@ void PCM::initRDT()
                 memory_bw_total.push_back(std::make_shared<CounterWidthExtender>(new CounterWidthExtender::MBTCounter(MSR[core]), 24, 1000));
             }
         }
-        rmid[topology[core].socket] --;
+        rmid[topology[core].socket_id] --;
         //std::cout << std::flush; // Explicitly flush after each iteration
     }
     /* Get The scaling factor by running CPUID.0xF.0x1 instruction */
@@ -697,7 +709,7 @@ void PCM::initCStateSupportTables()
     }
 
     // fill package C state array
-    switch(cpu_model)
+    switch(cpu_family_model)
     {
         case ATOM:
         case ATOM_2:
@@ -713,6 +725,8 @@ void PCM::initCStateSupportTables()
         case MTL:
         case LNL:
         case SNOWRIDGE:
+        case ELKHART_LAKE:
+        case JASPER_LAKE:
             PCM_CSTATE_ARRAY(pkgCStateMsr, PCM_PARAM_PROTECT({0, 0, 0x3F8, 0, 0x3F9, 0, 0x3FA, 0, 0, 0, 0 }) );
         case NEHALEM_EP:
         case NEHALEM:
@@ -738,6 +752,7 @@ void PCM::initCStateSupportTables()
         case SPR:
         case EMR:
         case GNR:
+        case GRR:
         case SRF:
             PCM_CSTATE_ARRAY(pkgCStateMsr, PCM_PARAM_PROTECT({0, 0, 0x60D, 0, 0, 0, 0x3F9, 0, 0, 0, 0}) );
         case HASWELL_ULT:
@@ -752,7 +767,7 @@ void PCM::initCStateSupportTables()
     };
 
     // fill core C state array
-    switch(cpu_model)
+    switch(cpu_family_model)
     {
         case ATOM:
         case ATOM_2:
@@ -789,10 +804,13 @@ void PCM::initCStateSupportTables()
         case MTL:
         case LNL:
         case SNOWRIDGE:
+        case ELKHART_LAKE:
+        case JASPER_LAKE:
         case ICX:
         case SPR:
         case EMR:
         case GNR:
+        case GRR:
         case SRF:
             PCM_CSTATE_ARRAY(coreCStateMsr, PCM_PARAM_PROTECT({0, 0, 0, 0x3FC, 0, 0, 0x3FD, 0x3FE, 0, 0, 0}) );
         case KNL:
@@ -1172,7 +1190,7 @@ bool PCM::discoverSystemTopology()
             }
             entry.die_id = getID(apic_id, TopologyEntry::DomainTypeID::DieDomain);
             entry.die_grp_id = getID(apic_id, TopologyEntry::DomainTypeID::DieGrpDomain);
-            entry.socket = getID(apic_id, TopologyEntry::DomainTypeID::SocketPackageDomain);
+            entry.socket_id = getID(apic_id, TopologyEntry::DomainTypeID::SocketPackageDomain);
         }
         else
         {
@@ -1265,7 +1283,7 @@ bool PCM::discoverSystemTopology()
         }
 
         topology.push_back(entry);
-        socketIdMap[entry.socket] = 0;
+        socketIdMap[entry.socket_id] = 0;
     }
 
     deleteAndNullifyArray(base_slpi);
@@ -1313,7 +1331,7 @@ bool PCM::discoverSystemTopology()
                 }
 
                 topology[entry.os_id] = entry;
-                socketIdMap[entry.socket] = 0;
+                socketIdMap[entry.socket_id] = 0;
                 ++num_online_cores;
             }
             catch (std::exception &)
@@ -1352,10 +1370,10 @@ bool PCM::discoverSystemTopology()
             return false;
         }
 
-        if (entry.socket == 0 && entry.core_id == 0) ++threads_per_core;
+        if (entry.socket_id == 0 && entry.core_id == 0) ++threads_per_core;
 
         topology.push_back(entry);
-        socketIdMap[entry.socket] = 0;
+        socketIdMap[entry.socket_id] = 0;
     }
 
 #else // Getting processor info for Mac OS
@@ -1403,10 +1421,10 @@ bool PCM::discoverSystemTopology()
       return false;
     }
     for(int i = 0; i < num_cores; i++){
-        socketIdMap[entries[i].socket] = 0;
+        socketIdMap[entries[i].socket_id] = 0;
         if(entries[i].os_id >= 0)
         {
-            if(entries[i].core_id == 0 && entries[i].socket == 0) ++threads_per_core;
+            if(entries[i].core_id == 0 && entries[i].socket_id == 0) ++threads_per_core;
             if (populateHybridEntry(entries[i], i) == false)
             {
                 return false;
@@ -1448,7 +1466,7 @@ bool PCM::discoverSystemTopology()
     for (int i = 0; (i < (int)num_cores) && (!socketIdMap.empty()); ++i)
     {
         if(isCoreOnline((int32)i))
-          topology[i].socket = socketIdMap[topology[i].socket];
+          topology[i].socket_id = socketIdMap[topology[i].socket_id];
     }
 
 #if 0
@@ -1456,14 +1474,14 @@ bool PCM::discoverSystemTopology()
     std::cerr << "Topology:\nsocket os_id core_id\n";
     for (int i = 0; i < num_cores; ++i)
     {
-        std::cerr << topology[i].socket << " " << topology[i].os_id << " " << topology[i].core_id << "\n";
+        std::cerr << topology[i].socket_id << " " << topology[i].os_id << " " << topology[i].core_id << "\n";
     }
 #endif
     if (threads_per_core == 0)
     {
         for (int i = 0; i < (int)num_cores; ++i)
         {
-            if (topology[i].socket == topology[0].socket && topology[i].core_id == topology[0].core_id)
+            if (topology[i].socket_id == topology[0].socket_id && topology[i].core_id == topology[0].core_id)
                 ++threads_per_core;
         }
         assert(threads_per_core != 0);
@@ -1478,7 +1496,7 @@ bool PCM::discoverSystemTopology()
     {
         if(isCoreOnline(i))
         {
-            socketRefCore[topology[i].socket] = i;
+            socketRefCore[topology[i].socket_id] = i;
         }
     }
 
@@ -1622,32 +1640,35 @@ bool PCM::detectNominalFrequency()
             uint64 freq = 0;
             MSR[socketRefCore[0]]->read(PLATFORM_INFO_ADDR, &freq);
             const uint64 bus_freq = (
-                  cpu_model == SANDY_BRIDGE
-               || cpu_model == JAKETOWN
-               || cpu_model == IVYTOWN
-               || cpu_model == HASWELLX
-               || cpu_model == BDX_DE
-               || cpu_model == BDX
-               || cpu_model == IVY_BRIDGE
-               || cpu_model == HASWELL
-               || cpu_model == BROADWELL
-               || cpu_model == AVOTON
-               || cpu_model == APOLLO_LAKE
-               || cpu_model == GEMINI_LAKE
-               || cpu_model == DENVERTON
+                  cpu_family_model == SANDY_BRIDGE
+               || cpu_family_model == JAKETOWN
+               || cpu_family_model == IVYTOWN
+               || cpu_family_model == HASWELLX
+               || cpu_family_model == BDX_DE
+               || cpu_family_model == BDX
+               || cpu_family_model == IVY_BRIDGE
+               || cpu_family_model == HASWELL
+               || cpu_family_model == BROADWELL
+               || cpu_family_model == AVOTON
+               || cpu_family_model == APOLLO_LAKE
+               || cpu_family_model == GEMINI_LAKE
+               || cpu_family_model == DENVERTON
                || useSKLPath()
-               || cpu_model == SNOWRIDGE
-               || cpu_model == KNL
-               || cpu_model == ADL
-               || cpu_model == RPL
-               || cpu_model == MTL
-               || cpu_model == LNL
-               || cpu_model == SKX
-               || cpu_model == ICX
-               || cpu_model == SPR
-               || cpu_model == EMR
-               || cpu_model == GNR
-               || cpu_model == SRF
+               || cpu_family_model == SNOWRIDGE
+               || cpu_family_model == ELKHART_LAKE
+               || cpu_family_model == JASPER_LAKE
+               || cpu_family_model == KNL
+               || cpu_family_model == ADL
+               || cpu_family_model == RPL
+               || cpu_family_model == MTL
+               || cpu_family_model == LNL
+               || cpu_family_model == SKX
+               || cpu_family_model == ICX
+               || cpu_family_model == SPR
+               || cpu_family_model == EMR
+               || cpu_family_model == GNR
+               || cpu_family_model == SRF
+               || cpu_family_model == GRR
                ) ? (100000000ULL) : (133333333ULL);
 
             nominal_frequency = ((freq >> 8) & 255) * bus_freq;
@@ -1683,7 +1704,7 @@ void PCM::initEnergyMonitoring()
         uint64 rapl_power_unit = 0;
         MSR[socketRefCore[0]]->read(MSR_RAPL_POWER_UNIT,&rapl_power_unit);
         uint64 energy_status_unit = extract_bits(rapl_power_unit,8,12);
-        if (cpu_model == PCM::CHERRYTRAIL || cpu_model == PCM::BAYTRAIL)
+        if (cpu_family_model == PCM::CHERRYTRAIL || cpu_family_model == PCM::BAYTRAIL)
             joulesPerEnergyUnit = double(1ULL << energy_status_unit)/1000000.; // (2)^energy_status_unit microJoules
         else
             joulesPerEnergyUnit = 1./double(1ULL<<energy_status_unit); // (1/2)^energy_status_unit
@@ -1898,7 +1919,7 @@ void PCM::initUncoreObjects()
        // initialize memory bandwidth counting
        try
        {
-           switch (cpu_model)
+           switch (cpu_family_model)
            {
            case TGL:
            case ADL: // TGLClientBW works fine for ADL
@@ -1938,13 +1959,14 @@ void PCM::initUncoreObjects()
            #endif
        }
     }
-    switch (cpu_model)
+    switch (cpu_family_model)
     {
     case ICX:
     case SNOWRIDGE:
     case SPR:
     case EMR:
     case GNR:
+    case GRR:
     case SRF:
         {
             bool failed = false;
@@ -1968,7 +1990,7 @@ void PCM::initUncoreObjects()
         }
         break;
     }
-    if (cpu_model == ICX || cpu_model == SNOWRIDGE)
+    if (cpu_family_model == ICX || cpu_family_model == SNOWRIDGE)
     {
         for (size_t s = 0; s < (size_t)num_sockets && s < socket2UBOX0bus.size() && s < serverUncorePMUs.size(); ++s)
         {
@@ -2050,7 +2072,7 @@ void PCM::globalFreezeUncoreCountersInternal(const unsigned long long int freeze
     for (uint32 s = 0; s < (uint32)num_sockets; ++s)
     {
         auto& handle = MSR[socketRefCore[s]];
-        switch (cpu_model)
+        switch (cpu_family_model)
         {
         case SPR:
         case EMR:
@@ -2081,7 +2103,7 @@ void PCM::initUncorePMUsDirect()
         // unfreeze uncore PMUs
         globalUnfreezeUncoreCounters();
 
-        switch (cpu_model)
+        switch (cpu_family_model)
         {
         case IVYTOWN:
         case JAKETOWN:
@@ -2152,6 +2174,28 @@ void PCM::initUncorePMUsDirect()
             );
             }
             break;
+        case GRR:
+            uncorePMUs[s].resize(1);
+            {
+            std::vector<std::shared_ptr<HWRegister> >   CounterControlRegs{
+                    std::make_shared<MSRRegister>(handle, GRR_UBOX_MSR_PMON_CTL0_ADDR),
+                    std::make_shared<MSRRegister>(handle, GRR_UBOX_MSR_PMON_CTL1_ADDR)
+            },
+                CounterValueRegs{
+                    std::make_shared<MSRRegister>(handle, GRR_UBOX_MSR_PMON_CTR0_ADDR),
+                    std::make_shared<MSRRegister>(handle, GRR_UBOX_MSR_PMON_CTR1_ADDR)
+            };
+            uncorePMUs[s][0][UBOX_PMU_ID].push_back(
+                std::make_shared<UncorePMU>(
+                    std::make_shared<MSRRegister>(handle, GRR_UBOX_MSR_PMON_BOX_CTL_ADDR),
+                    CounterControlRegs,
+                    CounterValueRegs,
+                    std::make_shared<MSRRegister>(handle, GRR_UCLK_FIXED_CTL_ADDR),
+                    std::make_shared<MSRRegister>(handle, GRR_UCLK_FIXED_CTR_ADDR)
+                )
+            );
+            }
+            break;
         default:
             if (isServerCPU() && hasPCICFGUncore())
             {
@@ -2208,7 +2252,7 @@ void PCM::initUncorePMUsDirect()
             }
         };
 
-        switch (cpu_model)
+        switch (cpu_family_model)
         {
         case IVYTOWN:
         case JAKETOWN:
@@ -2277,7 +2321,7 @@ void PCM::initUncorePMUsDirect()
                 std::cerr << "ERROR: MDF PMU not found\n";
             }
         };
-        switch (cpu_model)
+        switch (cpu_family_model)
         {
         case SPR:
         case EMR:
@@ -2328,9 +2372,10 @@ void PCM::initUncorePMUsDirect()
                 }
         };
 
-        switch (cpu_model)
+        switch (cpu_family_model)
         {
             case GNR:
+            case GRR:
             case SRF:
                 uncorePMUs[s].resize(1);
                 if (safe_getenv("PCM_NO_PCIE_GEN5_DISCOVERY") == std::string("1"))
@@ -2351,7 +2396,7 @@ void PCM::initUncorePMUsDirect()
 
     // init IIO addresses
     iioPMUs.resize(num_sockets);
-    switch (cpu_model)
+    switch (cpu_family_model)
     {
     case PCM::SKX:
         for (uint32 s = 0; s < (uint32)num_sockets; ++s)
@@ -2452,6 +2497,26 @@ void PCM::initUncorePMUsDirect()
                     std::make_shared<MSRRegister>(handle, BHS_M2IOSF_IIO_CTR0 + BHS_M2IOSF_REG_STEP * unit + 1),
                     std::make_shared<MSRRegister>(handle, BHS_M2IOSF_IIO_CTR0 + BHS_M2IOSF_REG_STEP * unit + 2),
                     std::make_shared<MSRRegister>(handle, BHS_M2IOSF_IIO_CTR0 + BHS_M2IOSF_REG_STEP * unit + 3)
+                );
+            }
+        }
+        break;
+    case PCM::GRR:
+        for (uint32 s = 0; s < (uint32)num_sockets; ++s)
+        {
+            auto & handle = MSR[socketRefCore[s]];
+            for (int unit = 0; unit < GRR_M2IOSF_NUM; ++unit)
+            {
+                iioPMUs[s][unit] = UncorePMU(
+                    std::make_shared<MSRRegister>(handle, GRR_M2IOSF_IIO_UNIT_CTL + GRR_M2IOSF_REG_STEP * unit),
+                    std::make_shared<MSRRegister>(handle, GRR_M2IOSF_IIO_CTL0 + GRR_M2IOSF_REG_STEP * unit + 0),
+                    std::make_shared<MSRRegister>(handle, GRR_M2IOSF_IIO_CTL0 + GRR_M2IOSF_REG_STEP * unit + 1),
+                    std::make_shared<MSRRegister>(handle, GRR_M2IOSF_IIO_CTL0 + GRR_M2IOSF_REG_STEP * unit + 2),
+                    std::make_shared<MSRRegister>(handle, GRR_M2IOSF_IIO_CTL0 + GRR_M2IOSF_REG_STEP * unit + 3),
+                    std::make_shared<MSRRegister>(handle, GRR_M2IOSF_IIO_CTR0 + GRR_M2IOSF_REG_STEP * unit + 0),
+                    std::make_shared<MSRRegister>(handle, GRR_M2IOSF_IIO_CTR0 + GRR_M2IOSF_REG_STEP * unit + 1),
+                    std::make_shared<MSRRegister>(handle, GRR_M2IOSF_IIO_CTR0 + GRR_M2IOSF_REG_STEP * unit + 2),
+                    std::make_shared<MSRRegister>(handle, GRR_M2IOSF_IIO_CTR0 + GRR_M2IOSF_REG_STEP * unit + 3)
                 );
             }
         }
@@ -2618,7 +2683,7 @@ void PCM::initUncorePMUsDirect()
     size_t IRP_CTR_REG_OFFSET = 0;
     const uint32* IRP_UNIT_CTL = nullptr;
 
-    switch (getCPUModel())
+    switch (getCPUFamilyModel())
     {
     case SKX:
         irpStacks = SKX_IIO_STACK_COUNT;
@@ -2651,6 +2716,12 @@ void PCM::initUncorePMUsDirect()
         IRP_CTL_REG_OFFSET = BHS_IRP_CTL_REG_OFFSET;
         IRP_CTR_REG_OFFSET = BHS_IRP_CTR_REG_OFFSET;
         IRP_UNIT_CTL = BHS_IRP_UNIT_CTL;
+        break;
+    case GRR:
+        irpStacks = GRR_M2IOSF_NUM;
+        IRP_CTL_REG_OFFSET = GRR_IRP_CTL_REG_OFFSET;
+        IRP_CTR_REG_OFFSET = GRR_IRP_CTR_REG_OFFSET;
+        IRP_UNIT_CTL = GRR_IRP_UNIT_CTL;
         break;
     }
     irpPMUs.resize(num_sockets);
@@ -2709,7 +2780,7 @@ void PCM::initUncorePMUsDirect()
     };
     for (uint32 s = 0; s < (uint32)num_sockets; ++s)
     {
-        switch (cpu_model)
+        switch (cpu_family_model)
         {
             case BDX:
                 irpPMUs[s][0] = findPCICFGPMU(0x6f39, s, 0xF4, {0xD8, 0xDC, 0xE0, 0xE4}, {0xA0, 0xB0, 0xB8, 0xC0});
@@ -2776,7 +2847,7 @@ void PCM::initUncorePMUsDirect()
                     return UncorePMU(std::make_shared<MMIORegister64>(handle, unitControlAddr - unitControlAddrAligned), CounterControlRegs, CounterValueRegs);
                 };
 
-                switch (getCPUModel())
+                switch (getCPUFamilyModel())
                 {
                     case PCM::SPR:
                     case PCM::EMR:
@@ -2963,7 +3034,8 @@ void increaseULimit()
 
 PCM::PCM() :
     cpu_family(-1),
-    cpu_model(-1),
+    cpu_model_private(-1),
+    cpu_family_model(-1),
     cpu_stepping(-1),
     cpu_microcode_level(-1),
     max_cpuid(0),
@@ -3113,16 +3185,16 @@ void PCM::printDetailedSystemTopology(const int detailLevel)
             if (detailLevel > 0) std::cerr << std::setw(16) << it->module_id;
             std::cerr << std::setw(16) << it->tile_id;
             if (detailLevel > 0) std::cerr << std::setw(16) << it->die_id << std::setw(16) << it->die_grp_id;
-            std::cerr << std::setw(16) << it->socket
+            std::cerr << std::setw(16) << it->socket_id
                 << std::setw(16) << it->getCoreTypeStr()
                 << std::setw(16) << it->native_cpu_model
                 << "\n";
-            if (std::find(core_id_by_socket[it->socket].begin(), core_id_by_socket[it->socket].end(), it->core_id)
-                == core_id_by_socket[it->socket].end())
-                core_id_by_socket[it->socket].push_back(it->core_id);
+            if (std::find(core_id_by_socket[it->socket_id].begin(), core_id_by_socket[it->socket_id].end(), it->core_id)
+                == core_id_by_socket[it->socket_id].end())
+                core_id_by_socket[it->socket_id].push_back(it->core_id);
             // add socket offset to distinguish cores and tiles from different sockets
-            os_id_by_core[(it->socket << 15) + it->core_id].push_back(it->os_id);
-            os_id_by_tile[(it->socket << 15) + it->tile_id].push_back(it->os_id);
+            os_id_by_core[(it->socket_id << 15) + it->core_id].push_back(it->os_id);
+            os_id_by_tile[(it->socket_id << 15) + it->tile_id].push_back(it->os_id);
 
             ++counter;
         }
@@ -3214,7 +3286,7 @@ void PCM::showSpecControlMSRs()
 
 bool PCM::isCoreOnline(int32 os_core_id) const
 {
-    return (topology[os_core_id].os_id != -1) && (topology[os_core_id].core_id != -1) && (topology[os_core_id].socket != -1);
+    return (topology[os_core_id].os_id != -1) && (topology[os_core_id].core_id != -1) && (topology[os_core_id].socket_id != -1);
 }
 
 bool PCM::isSocketOnline(int32 socket_id) const
@@ -3230,6 +3302,8 @@ bool PCM::isCPUModelSupported(const int model_)
             || model_ == WESTMERE_EX
             || isAtom(model_)
             || model_ == SNOWRIDGE
+            || model_ == ELKHART_LAKE
+            || model_ == JASPER_LAKE
             || model_ == CLARKDALE
             || model_ == SANDY_BRIDGE
             || model_ == JAKETOWN
@@ -3258,59 +3332,60 @@ bool PCM::isCPUModelSupported(const int model_)
             || model_ == SPR
             || model_ == EMR
             || model_ == GNR
+            || model_ == GRR
             || model_ == SRF
            );
 }
 
 bool PCM::checkModel()
 {
-    switch (cpu_model)
+    switch (cpu_family_model)
     {
         case NEHALEM:
-            cpu_model = NEHALEM_EP;
+            cpu_family_model = NEHALEM_EP;
             break;
         case ATOM_2:
-            cpu_model = ATOM;
+            cpu_family_model = ATOM;
             break;
         case HASWELL_ULT:
         case HASWELL_2:
-            cpu_model = HASWELL;
+            cpu_family_model = HASWELL;
             break;
         case BROADWELL_XEON_E3:
-            cpu_model = BROADWELL;
+            cpu_family_model = BROADWELL;
             break;
         case ICX_D:
-            cpu_model = ICX;
+            cpu_family_model = ICX;
             break;
         case CML_1:
-            cpu_model = CML;
+            cpu_family_model = CML;
             break;
         case ICL_1:
-            cpu_model = ICL;
+            cpu_family_model = ICL;
             break;
         case TGL_1:
-            cpu_model = TGL;
+            cpu_family_model = TGL;
             break;
         case ADL_1:
-            cpu_model = ADL;
+            cpu_family_model = ADL;
             break;
         case RPL_1:
         case RPL_2:
         case RPL_3:
-            cpu_model = RPL;
+            cpu_family_model = RPL;
             break;
         case GNR_D:
-            cpu_model = GNR;
+            cpu_family_model = GNR;
             break;
     }
 
-    if(!isCPUModelSupported((int)cpu_model))
+    if(!isCPUModelSupported((int)cpu_family_model))
     {
-        std::cerr << getUnsupportedMessage() << " CPU model number: " << cpu_model << " Brand: \"" << getCPUBrandString().c_str() << "\"\n";
+        std::cerr << getUnsupportedMessage() << " CPU family " << cpu_family << " model number " << cpu_model_private << " Brand: \"" << getCPUBrandString().c_str() << "\"\n";
 /* FOR TESTING PURPOSES ONLY */
 #ifdef PCM_TEST_FALLBACK_TO_ATOM
         std::cerr << "Fall back to ATOM functionality.\n";
-        cpu_model = ATOM;
+        cpu_family_model = ATOM;
         return true;
 #endif
         return false;
@@ -3428,7 +3503,7 @@ PCM::ErrorCode PCM::program(const PCM::ProgramMode mode_, const void * parameter
         canUsePerf = false;
         if (!silent) std::cerr << "Installed Linux kernel perf does not support hardware top-down level-1 counters. Using direct PMU programming instead.\n";
     }
-    if (canUsePerf && (cpu_model == ADL || cpu_model == RPL || cpu_model == MTL || cpu_model == LNL))
+    if (canUsePerf && (cpu_family_model == ADL || cpu_family_model == RPL || cpu_family_model == MTL || cpu_family_model == LNL))
     {
         canUsePerf = false;
         if (!silent) std::cerr << "Linux kernel perf rejects an architectural event on your platform. Using direct PMU programming instead.\n";
@@ -3462,7 +3537,7 @@ PCM::ErrorCode PCM::program(const PCM::ProgramMode mode_, const void * parameter
         CustomCoreEventDescription * pDesc = (CustomCoreEventDescription *)parameter_;
         coreEventDesc[0] = pDesc[0];
         coreEventDesc[1] = pDesc[1];
-        if (isAtom() == false && cpu_model != KNL)
+        if (isAtom() == false && cpu_family_model != KNL)
         {
             coreEventDesc[2] = pDesc[2];
             core_gen_counter_num_used = 3;
@@ -3483,7 +3558,7 @@ PCM::ErrorCode PCM::program(const PCM::ProgramMode mode_, const void * parameter
             evt[1].event_number = ARCH_LLC_REFERENCE_EVTNR;
             evt[1].umask_value = ARCH_LLC_REFERENCE_UMASK;
         };
-        if (isAtom() || cpu_model == KNL)
+        if (isAtom() || cpu_family_model == KNL)
         {
             LLCArchEventInit(coreEventDesc);
             L2CacheHitRatioAvailable = true;
@@ -3499,7 +3574,7 @@ PCM::ErrorCode PCM::program(const PCM::ProgramMode mode_, const void * parameter
             L2CacheMissesAvailable = true;
             L3CacheHitsAvailable = true;
             core_gen_counter_num_used = 2;
-            if (HASWELLX == cpu_model || HASWELL == cpu_model)
+            if (HASWELLX == cpu_family_model || HASWELL == cpu_family_model)
             {
                 coreEventDesc[BasicCounterState::HSXL2MissPos].event_number = HSX_L2_RQSTS_MISS_EVTNR;
                 coreEventDesc[BasicCounterState::HSXL2MissPos].umask_value = HSX_L2_RQSTS_MISS_UMASK;
@@ -3511,7 +3586,7 @@ PCM::ErrorCode PCM::program(const PCM::ProgramMode mode_, const void * parameter
             }
         }
         else
-        switch ( cpu_model ) {
+        switch (cpu_family_model) {
             case ADL:
             case RPL:
             case MTL:
@@ -3536,6 +3611,8 @@ PCM::ErrorCode PCM::program(const PCM::ProgramMode mode_, const void * parameter
                 core_gen_counter_num_used = 4;
                 break;
             case SNOWRIDGE:
+            case ELKHART_LAKE:
+            case JASPER_LAKE:
                 LLCArchEventInit(coreEventDesc);
                 coreEventDesc[2].event_number = SKL_MEM_LOAD_RETIRED_L2_MISS_EVTNR;
                 coreEventDesc[2].umask_value = SKL_MEM_LOAD_RETIRED_L2_MISS_UMASK;
@@ -3550,6 +3627,7 @@ PCM::ErrorCode PCM::program(const PCM::ProgramMode mode_, const void * parameter
                 L3CacheHitsAvailable = true;
                 core_gen_counter_num_used = 4;
                 break;
+            case GRR:
             case SRF:
                 LLCArchEventInit(coreEventDesc);
                 coreEventDesc[2].event_number = CMT_MEM_LOAD_RETIRED_L2_MISS_EVTNR;
@@ -3696,7 +3774,7 @@ PCM::ErrorCode PCM::program(const PCM::ProgramMode mode_, const void * parameter
         core_gen_counter_num_used = pExtDesc->nGPCounters;
     }
 
-    if(cpu_model == JAKETOWN)
+    if(cpu_family_model == JAKETOWN)
     {
         bool enableWA = false;
         for(uint32 i = 0; i< core_gen_counter_num_used; ++i)
@@ -3823,7 +3901,7 @@ PCM::ErrorCode PCM::program(const PCM::ProgramMode mode_, const void * parameter
         {
             serverUncorePMUs[i]->program();
             qpi_speeds.push_back(std::async(std::launch::async,
-                &ServerUncorePMUs::computeQPISpeed, serverUncorePMUs[i].get(), socketRefCore[i], cpu_model));
+                &ServerUncorePMUs::computeQPISpeed, serverUncorePMUs[i].get(), socketRefCore[i], cpu_family_model));
         }
         for (size_t i = 0; i < (size_t)serverUncorePMUs.size(); ++i)
         {
@@ -3833,7 +3911,7 @@ PCM::ErrorCode PCM::program(const PCM::ProgramMode mode_, const void * parameter
         programCbo();
 
     } // program uncore counters on old CPU arch
-    else if (cpu_model == NEHALEM_EP || cpu_model == WESTMERE_EP || cpu_model == CLARKDALE)
+    else if (cpu_family_model == NEHALEM_EP || cpu_family_model == WESTMERE_EP || cpu_family_model == CLARKDALE)
     {
         for (int i = 0; i < (int)num_cores; ++i)
         {
@@ -4168,7 +4246,7 @@ PCM::ErrorCode PCM::programCoreCounters(const int i /* core */,
 	    MSR[i]->write(PERF_METRICS_ADDR, 0);
 	}
 
-        if (isAtom() || cpu_model == KNL)       // KNL and Atom have 3 fixed + only 2 programmable counters
+        if (isAtom() || cpu_family_model == KNL)       // KNL and Atom have 3 fixed + only 2 programmable counters
             value = (1ULL << 0) + (1ULL << 1) + (1ULL << 32) + (1ULL << 33) + (1ULL << 34);
 
         for (uint32 j = 0; j < core_gen_counter_num_used; ++j)
@@ -4369,7 +4447,7 @@ void PCM::programBecktonUncore(int32 core)
 
     BecktonUncorePMUZDPCTLFVCRegister FVCreg;
     FVCreg.value = 0;
-    if (cpu_model == NEHALEM_EX)
+    if (cpu_family_model == NEHALEM_EX)
     {
         FVCreg.fields.bcmd = 0;             // rd_bcmd
         FVCreg.fields.resp = 0;             // ack_resp
@@ -4490,14 +4568,14 @@ std::string PCM::getCPUBrandString()
 
 std::string PCM::getCPUFamilyModelString()
 {
-    return getCPUFamilyModelString(cpu_family, cpu_model, cpu_stepping);
+    return getCPUFamilyModelString(cpu_family, cpu_model_private, cpu_stepping);
 }
 
-std::string PCM::getCPUFamilyModelString(const uint32 cpu_family_, const uint32 cpu_model_, const uint32 cpu_stepping_)
+std::string PCM::getCPUFamilyModelString(const uint32 cpu_family_, const uint32 internal_cpu_model_, const uint32 cpu_stepping_)
 {
     char buffer[sizeof(int)*4*3+6];
     std::fill(buffer, buffer + sizeof(buffer), 0);
-    std::snprintf(buffer,sizeof(buffer),"GenuineIntel-%d-%2X-%X", cpu_family_, cpu_model_, cpu_stepping_);
+    std::snprintf(buffer,sizeof(buffer),"GenuineIntel-%d-%2X-%X", cpu_family_, internal_cpu_model_, cpu_stepping_);
     std::string result(buffer);
     return result;
 }
@@ -4787,13 +4865,13 @@ bool PCM::PMUinUse()
     return false;
 }
 
-const char * PCM::getUArchCodename(const int32 cpu_model_param) const
+const char * PCM::getUArchCodename(const int32 cpu_family_model_param) const
 {
-    auto cpu_model_ = cpu_model_param;
-    if(cpu_model_ < 0)
-        cpu_model_ = this->cpu_model ;
+    auto cpu_family_model_ = cpu_family_model_param;
+    if(cpu_family_model_ < 0)
+        cpu_family_model_ = this->cpu_family_model;
 
-    switch(cpu_model_)
+    switch(cpu_family_model_)
     {
         case CENTERTON:
             return "Centerton";
@@ -4811,6 +4889,10 @@ const char * PCM::getUArchCodename(const int32 cpu_model_param) const
             return "Denverton";
         case SNOWRIDGE:
             return "Snowridge";
+        case ELKHART_LAKE:
+            return "Elkhart Lake";
+        case JASPER_LAKE:
+            return "Jasper Lake";
         case NEHALEM_EP:
         case NEHALEM:
             return "Nehalem/Nehalem-EP";
@@ -4869,9 +4951,9 @@ const char * PCM::getUArchCodename(const int32 cpu_model_param) const
         case LNL:
             return "Lunar Lake";
         case SKX:
-            if (cpu_model_param >= 0)
+            if (cpu_family_model_param >= 0)
             {
-                // query for specified cpu_model_param, stepping not provided
+                // query for specified cpu_family_model_param, stepping not provided
                 return "Skylake-SP, Cascade Lake-SP";
             }
             if (isCLX())
@@ -4891,6 +4973,8 @@ const char * PCM::getUArchCodename(const int32 cpu_model_param) const
             return "Emerald Rapids-SP";
         case GNR:
             return "Granite Rapids-SP";
+        case GRR:
+            return "Grand Ridge";
         case SRF:
             return "Sierra Forest";
     }
@@ -4954,7 +5038,7 @@ void PCM::cleanupPMU(const bool silent)
     }
     cleanupPEBS = false;
 
-    if(cpu_model == JAKETOWN)
+    if(cpu_family_model == JAKETOWN)
         enableJKTWorkaround(false);
 
 #ifndef PCM_SILENT
@@ -5344,8 +5428,8 @@ void BasicCounterState::readAndAggregateTSC(std::shared_ptr<SafeMsrHandle> msr)
 {
     uint64 cInvariantTSC = 0;
     PCM * m = PCM::getInstance();
-    const auto cpu_model = m->getCPUModel();
-    if (m->isAtom() == false || cpu_model == PCM::AVOTON)
+    const auto cpu_family_model = m->getCPUFamilyModel();
+    if (m->isAtom() == false || cpu_family_model == PCM::AVOTON)
     {
         cInvariantTSC = m->getInvariantTSC_Fast(msr->getCoreId());
         MSRValues[IA32_TIME_STAMP_COUNTER] = cInvariantTSC;
@@ -5569,7 +5653,7 @@ PCM::ErrorCode PCM::programServerUncoreLatencyMetrics(bool enable_pmm)
 
     if (enable_pmm == false)
     {   //DDR is false
-        if (ICX == cpu_model || SPR == cpu_model || EMR == cpu_model)
+        if (ICX == cpu_family_model || SPR == cpu_family_model || EMR == cpu_family_model)
 	{
             DDRConfig[0] = MC_CH_PCI_PMON_CTL_EVENT(0x80) + MC_CH_PCI_PMON_CTL_UMASK(1);  // DRAM RPQ occupancy
             DDRConfig[1] = MC_CH_PCI_PMON_CTL_EVENT(0x10) + MC_CH_PCI_PMON_CTL_UMASK(1);  // DRAM RPQ Insert
@@ -5620,7 +5704,13 @@ PCM::ErrorCode PCM::programServerUncorePowerMetrics(int mc_profile, int pcu_prof
 
     uint32 PCUCntConf[4] = {0,0,0,0};
 
-    switch (cpu_model)
+    auto printError = [this](const char * eventCategory)
+    {
+        assert(eventCategory);
+        std::cerr << "ERROR: no " << eventCategory << " events defined for CPU family " << cpu_family << " model " << cpu_model_private << "\n";
+    };
+
+    switch (cpu_family_model)
     {
         case SPR:
         case EMR:
@@ -5641,7 +5731,7 @@ PCM::ErrorCode PCM::programServerUncorePowerMetrics(int mc_profile, int pcu_prof
          PCUCntConf[3] =  PCU_MSR_PMON_CTL_EVENT(0xD); // FREQ_BAND2_CYCLES
          break;
     case 1:
-         switch (cpu_model)
+         switch (cpu_family_model)
          {
              case SPR:
              case EMR:
@@ -5674,57 +5764,57 @@ PCM::ErrorCode PCM::programServerUncorePowerMetrics(int mc_profile, int pcu_prof
          PCUCntConf[3] =  PCU_MSR_PMON_CTL_EVENT(0x07); // Clipped frequency limit cycles: FREQ_MAX_CURRENT_CYCLES (not supported on SKX,ICX,SNOWRIDGE,SPR,EMR,SRF,GNR)
          break;
     case 5:
-         if(JAKETOWN == cpu_model)
+         if (JAKETOWN == cpu_family_model)
          {
              PCUCntConf[1] =  PCU_MSR_PMON_CTL_EVENT(0) + PCU_MSR_PMON_CTL_EXTRA_SEL + PCU_MSR_PMON_CTL_EDGE_DET ; // number of frequency transitions
              PCUCntConf[2] =  PCU_MSR_PMON_CTL_EVENT(0) + PCU_MSR_PMON_CTL_EXTRA_SEL ; // cycles spent changing frequency
-         } else if (IVYTOWN == cpu_model )
+         } else if (IVYTOWN == cpu_family_model)
          {
              PCUCntConf[1] =  PCU_MSR_PMON_CTL_EVENT(0x60) + PCU_MSR_PMON_CTL_EDGE_DET ; // number of frequency transitions
              PCUCntConf[2] =  PCU_MSR_PMON_CTL_EVENT(0x60) ; // cycles spent changing frequency: FREQ_TRANS_CYCLES
          } else if (
-               HASWELLX == cpu_model
-            || BDX_DE == cpu_model
-            || BDX == cpu_model
-            || SKX == cpu_model
-            || ICX == cpu_model
-            || SNOWRIDGE == cpu_model
-            || SPR == cpu_model
-            || EMR == cpu_model
-            || SRF == cpu_model
-            || GNR == cpu_model
-            || GNR_D == cpu_model
+               HASWELLX == cpu_family_model
+            || BDX_DE == cpu_family_model
+            || BDX == cpu_family_model
+            || SKX == cpu_family_model
+            || ICX == cpu_family_model
+            || SNOWRIDGE == cpu_family_model
+            || SPR == cpu_family_model
+            || EMR == cpu_family_model
+            || SRF == cpu_family_model
+            || GNR == cpu_family_model
+            || GNR_D == cpu_family_model
             )
          {
              PCUCntConf[1] =  PCU_MSR_PMON_CTL_EVENT(0x74) + PCU_MSR_PMON_CTL_EDGE_DET ; // number of frequency transitions
              PCUCntConf[2] =  PCU_MSR_PMON_CTL_EVENT(0x74) ; // cycles spent changing frequency: FREQ_TRANS_CYCLES
-             if(HASWELLX == cpu_model)
+             if(HASWELLX == cpu_family_model)
              {
                  PCUCntConf[3] =  PCU_MSR_PMON_CTL_EVENT(0x79) + PCU_MSR_PMON_CTL_EDGE_DET ; // number of UFS transitions
                  PCUCntConf[0] =  PCU_MSR_PMON_CTL_EVENT(0x79)                             ; // UFS transition cycles
              }
          } else
          {
-             std::cerr << "ERROR: no frequency transition events defined for CPU model " << cpu_model << "\n";
+             printError("frequency transition");
          }
          break;
     case 6:
-         if (IVYTOWN == cpu_model )
+         if (IVYTOWN == cpu_family_model)
          {
              PCUCntConf[2] =  PCU_MSR_PMON_CTL_EVENT(0x2B) + PCU_MSR_PMON_CTL_EDGE_DET ; // PC2 transitions
              PCUCntConf[3] =  PCU_MSR_PMON_CTL_EVENT(0x2D) + PCU_MSR_PMON_CTL_EDGE_DET ; // PC6 transitions
          } else if (
-               HASWELLX == cpu_model
-            || BDX_DE == cpu_model
-            || BDX == cpu_model
-            || SKX == cpu_model
-            || ICX == cpu_model
-            || SNOWRIDGE == cpu_model
-            || SPR == cpu_model
-            || EMR == cpu_model
-            || SRF == cpu_model
-            || GNR == cpu_model
-            || GNR_D == cpu_model
+               HASWELLX == cpu_family_model
+            || BDX_DE == cpu_family_model
+            || BDX == cpu_family_model
+            || SKX == cpu_family_model
+            || ICX == cpu_family_model
+            || SNOWRIDGE == cpu_family_model
+            || SPR == cpu_family_model
+            || EMR == cpu_family_model
+            || SRF == cpu_family_model
+            || GNR == cpu_family_model
+            || GNR_D == cpu_family_model
             )
          {
              PCUCntConf[0] =  PCU_MSR_PMON_CTL_EVENT(0x4E)                             ; // PC1e residenicies (not supported on SKX,ICX,SNOWRIDGE,SPR,EMR,SRF,GNR)
@@ -5733,11 +5823,11 @@ PCM::ErrorCode PCM::programServerUncorePowerMetrics(int mc_profile, int pcu_prof
              PCUCntConf[3] =  PCU_MSR_PMON_CTL_EVENT(0x2D) + PCU_MSR_PMON_CTL_EDGE_DET ; // PC6 transitions
          } else
          {
-             std::cerr << "ERROR: no package C-state transition events defined for CPU model " << cpu_model << "\n";
+             printError("package C-state transition");
          }
          break;
      case 7:
-         if (HASWELLX == cpu_model || BDX_DE == cpu_model || BDX == cpu_model)
+         if (HASWELLX == cpu_family_model || BDX_DE == cpu_family_model || BDX == cpu_family_model)
          {
              PCUCntConf[0] =  PCU_MSR_PMON_CTL_EVENT(0x7E) ; // UFS_TRANSITIONS_PERF_P_LIMIT
              PCUCntConf[1] =  PCU_MSR_PMON_CTL_EVENT(0x7D) ; // UFS_TRANSITIONS_IO_P_LIMIT
@@ -5745,16 +5835,16 @@ PCM::ErrorCode PCM::programServerUncorePowerMetrics(int mc_profile, int pcu_prof
              PCUCntConf[3] =  PCU_MSR_PMON_CTL_EVENT(0x7B) ; // UFS_TRANSITIONS_UP_STALL_CYCLES
          } else
          {
-             std::cerr << "ERROR: no UFS transition events defined for CPU model " << cpu_model << "\n";
+             printError("UFS transition");
          }
          break;
     case 8:
-         if (HASWELLX == cpu_model || BDX_DE == cpu_model || BDX == cpu_model)
+         if (HASWELLX == cpu_family_model || BDX_DE == cpu_family_model || BDX == cpu_family_model)
          {
              PCUCntConf[0] =  PCU_MSR_PMON_CTL_EVENT(0x7C) ; // UFS_TRANSITIONS_DOWN
          } else
          {
-             std::cerr << "ERROR: no UFS transition events defined for CPU model " << cpu_model << "\n";
+             printError("UFS transition");
          }
          break;
     default:
@@ -6408,7 +6498,7 @@ void PCM::readAndAggregateUncoreMCCounters(const uint32 socket, CounterStateType
     {
         std::shared_ptr<SafeMsrHandle> msr = MSR[socketRefCore[socket]];
         TemporalThreadAffinity tempThreadAffinity(socketRefCore[socket]); // speedup trick for Linux
-        switch (cpu_model)
+        switch (cpu_family_model)
         {
             case PCM::WESTMERE_EP:
             case PCM::NEHALEM_EP:
@@ -6496,7 +6586,10 @@ void PCM::readAndAggregatePackageCStateResidencies(std::shared_ptr<SafeMsrHandle
 
     for (int i = 0; i <= int(PCM::MAX_C_STATE); ++i)
     {
-        atomic_fetch_add((std::atomic<uint64> *)(result.CStateResidency + i), cCStateResidency[i]);
+        if (cCStateResidency[i])
+        {
+            atomic_fetch_add((std::atomic<uint64> *)(result.CStateResidency + i), cCStateResidency[i]);
+        }
     }
 }
 
@@ -6630,7 +6723,7 @@ void PCM::readQPICounters(SystemCounterState & result)
 {
         // read QPI counters
         std::vector<bool> SocketProcessed(num_sockets, false);
-        if (cpu_model == PCM::NEHALEM_EX || cpu_model == PCM::WESTMERE_EX)
+        if (cpu_family_model == PCM::NEHALEM_EX || cpu_family_model == PCM::WESTMERE_EX)
         {
             for (int32 core = 0; core < num_cores; ++core)
             {
@@ -6638,7 +6731,7 @@ void PCM::readQPICounters(SystemCounterState & result)
 
                 if(core == socketRefCore[0]) MSR[core]->read(W_MSR_PMON_FIXED_CTR, &(result.uncoreTSC));
 
-                uint32 s = topology[core].socket;
+                uint32 s = topology[core].socket_id;
 
                 if (!SocketProcessed[s])
                 {
@@ -6666,7 +6759,7 @@ void PCM::readQPICounters(SystemCounterState & result)
                 }
             }
         }
-        else if ((cpu_model == PCM::NEHALEM_EP || cpu_model == PCM::WESTMERE_EP))
+        else if ((cpu_family_model == PCM::NEHALEM_EP || cpu_family_model == PCM::WESTMERE_EP))
         {
             if (num_sockets == 2)
             {
@@ -6766,7 +6859,7 @@ SocketCounterState PCM::getSocketCounterState(uint32 socket)
     {
         // reading core and uncore counter states
         for (int32 core = 0; core < num_cores; ++core)
-            if (isCoreOnline(core) && (topology[core].socket == int32(socket)))
+            if (isCoreOnline(core) && (topology[core].socket_id == int32(socket)))
                 result.readAndAggregate(MSR[core]);
 
         readAndAggregateUncoreMCCounters(socket, result);
@@ -6800,7 +6893,7 @@ void PCM::getAllCounterStates(SystemCounterState & systemState, std::vector<Sock
                     coreStates[core].readAndAggregate(MSR[core]);
                     if (readAndAggregateSocketUncoreCounters)
                     {
-                        socketStates[topology[core].socket].UncoreCounterState::readAndAggregate(MSR[core]); // read package C state counters
+                        socketStates[topology[core].socket_id].UncoreCounterState::readAndAggregate(MSR[core]); // read package C state counters
                     }
                     readMSRs(MSR[core], threadMSRConfig, coreStates[core]);
                 }
@@ -6840,7 +6933,7 @@ void PCM::getAllCounterStates(SystemCounterState & systemState, std::vector<Sock
     for (int32 core = 0; core < num_cores; ++core)
     {   // aggregate core counters into sockets
         if(isCoreOnline(core))
-          socketStates[topology[core].socket] += coreStates[core];
+          socketStates[topology[core].socket_id] += coreStates[core];
     }
 
     for (int32 s = 0; s < num_sockets; ++s)
@@ -6879,7 +6972,7 @@ void PCM::getUncoreCounterStates(SystemCounterState & systemState, std::vector<S
         {
             for(uint32 core=0; core < getNumCores(); ++core)
             {
-                if(topology[core].socket == s && isCoreOnline(core))
+                if(topology[core].socket_id == s && isCoreOnline(core))
                     socketStates[s] += refCoreStates[s];
             }
         }
@@ -7364,7 +7457,7 @@ ServerUncorePMUs::ServerUncorePMUs(uint32 socket_, const PCM * pcm) :
    , UPIbus(-1)
    , M2Mbus(-1)
    , groupnr(0)
-   , cpu_model(pcm->getCPUModel())
+   , cpu_family_model(pcm->getCPUFamilyModel())
    , qpi_speed(0)
 {
     if (pcm->useLinuxPerfForUncore())
@@ -7421,7 +7514,10 @@ void ServerUncorePMUs::initRegisterLocations(const PCM * pcm)
     HARegisterLocation.resize(x + 1); \
     HARegisterLocation[x] = std::make_pair(arch##_HA##x##_REGISTER_DEV_ADDR, arch##_HA##x##_REGISTER_FUNC_ADDR);
 
-    if(cpu_model == PCM::JAKETOWN || cpu_model == PCM::IVYTOWN)
+    switch (cpu_family_model)
+    {
+    case PCM::JAKETOWN:
+    case PCM::IVYTOWN:
     {
         PCM_PCICFG_MC_INIT(0, 0, JKTIVT)
         PCM_PCICFG_MC_INIT(0, 1, JKTIVT)
@@ -7436,7 +7532,10 @@ void ServerUncorePMUs::initRegisterLocations(const PCM * pcm)
         PCM_PCICFG_QPI_INIT(1, JKTIVT);
         PCM_PCICFG_QPI_INIT(2, JKTIVT);
     }
-    else if(cpu_model == PCM::HASWELLX || cpu_model == PCM::BDX_DE || cpu_model == PCM::BDX)
+    break;
+    case PCM::HASWELLX:
+    case PCM::BDX_DE:
+    case PCM::BDX:
     {
         PCM_PCICFG_MC_INIT(0, 0, HSX)
         PCM_PCICFG_MC_INIT(0, 1, HSX)
@@ -7454,7 +7553,8 @@ void ServerUncorePMUs::initRegisterLocations(const PCM * pcm)
         PCM_PCICFG_HA_INIT(0, HSX);
         PCM_PCICFG_HA_INIT(1, HSX);
     }
-    else if(cpu_model == PCM::SKX)
+    break;
+    case PCM::SKX:
     {
         PCM_PCICFG_MC_INIT(0, 0, SKX)
         PCM_PCICFG_MC_INIT(0, 1, SKX)
@@ -7498,7 +7598,8 @@ void ServerUncorePMUs::initRegisterLocations(const PCM * pcm)
             PCM_PCICFG_M3UPI_INIT(2, SKX);
         }
     }
-    else if (cpu_model == PCM::ICX)
+    break;
+    case PCM::ICX:
     {
         PCM_PCICFG_QPI_INIT(0, ICX);
         PCM_PCICFG_QPI_INIT(1, ICX);
@@ -7513,7 +7614,9 @@ void ServerUncorePMUs::initRegisterLocations(const PCM * pcm)
         PCM_PCICFG_M2M_INIT(2, SERVER)
         PCM_PCICFG_M2M_INIT(3, SERVER)
     }
-    else if (cpu_model == PCM::SPR || cpu_model == PCM::EMR)
+    break;
+    case PCM::SPR:
+    case PCM::EMR:
     {
         PCM_PCICFG_QPI_INIT(0, SPR);
         PCM_PCICFG_QPI_INIT(1, SPR);
@@ -7547,7 +7650,8 @@ void ServerUncorePMUs::initRegisterLocations(const PCM * pcm)
         PCM_PCICFG_HBM_M2M_INIT(14, SERVER)
         PCM_PCICFG_HBM_M2M_INIT(15, SERVER)
     }
-    else if(cpu_model == PCM::KNL)
+    break;
+    case PCM::KNL:
     {
         // 2 DDR4 Memory Controllers with 3 channels each
         PCM_PCICFG_MC_INIT(0, 0, KNL)
@@ -7567,10 +7671,9 @@ void ServerUncorePMUs::initRegisterLocations(const PCM * pcm)
         PCM_PCICFG_EDC_INIT(6, ECLK, KNL)
         PCM_PCICFG_EDC_INIT(7, ECLK, KNL)
     }
-    else if (
-        cpu_model == PCM::SRF
-     || cpu_model == PCM::GNR
-        )
+    break;
+    case PCM::SRF:
+    case PCM::GNR:
     {
         PCM_PCICFG_QPI_INIT(0, BHS);
         PCM_PCICFG_QPI_INIT(1, BHS);
@@ -7601,16 +7704,22 @@ void ServerUncorePMUs::initRegisterLocations(const PCM * pcm)
         PCM_PCICFG_M3UPI_INIT(4, BHS);
         PCM_PCICFG_M3UPI_INIT(5, BHS);
     }
-    else if (cpu_model == PCM::SNOWRIDGE)
+    break;
+    case PCM::SNOWRIDGE:
     {
         PCM_PCICFG_M2M_INIT(0, SERVER)
         PCM_PCICFG_M2M_INIT(1, SERVER)
         PCM_PCICFG_M2M_INIT(2, SERVER)
         PCM_PCICFG_M2M_INIT(3, SERVER)
     }
-    else
+    break;
+    case PCM::GRR:
     {
-        std::cerr << "Error: Uncore PMU for processor with model id " << cpu_model << " is not supported.\n";
+        // placeholder to init GRR PCICFG
+    }
+    break;
+    default:
+        std::cerr << "Error: Uncore PMU for processor with id 0x" << std::hex << cpu_family_model << std::dec << " is not supported.\n";
         throw std::exception();
     }
 
@@ -7695,7 +7804,7 @@ void ServerUncorePMUs::initBuses(uint32 socket_, const PCM * pcm)
     return;
 #endif
 
-    if (PCM::hasUPI(cpu_model) && XPIRegisterLocation.size() > 0)
+    if (PCM::hasUPI(cpu_family_model) && XPIRegisterLocation.size() > 0)
     {
         initSocket2Bus(socket2UPIbus, XPIRegisterLocation[0].first, XPIRegisterLocation[0].second, UPI_DEV_IDS, (uint32)sizeof(UPI_DEV_IDS) / sizeof(UPI_DEV_IDS[0]));
         if(total_sockets_ == socket2UPIbus.size())
@@ -7741,7 +7850,7 @@ void ServerUncorePMUs::initDirect(uint32 socket_, const PCM * pcm)
 
         for (auto & handle : imcHandles)
         {
-            if (cpu_model == PCM::KNL) {
+            if (cpu_family_model == PCM::KNL) {
                 imcPMUs.push_back(
                     UncorePMU(
                         std::make_shared<PCICFGRegister32>(handle, KNX_MC_CH_PCI_PMON_BOX_CTL_ADDR),
@@ -7776,7 +7885,7 @@ void ServerUncorePMUs::initDirect(uint32 socket_, const PCM * pcm)
         }
     }
 
-    auto populateM2MPMUs = [](uint32 groupnr, int32 M2Mbus, int32 cpu_model, const std::vector<std::pair<uint32, uint32> > & M2MRegisterLocation, UncorePMUVector & m2mPMUs)
+    auto populateM2MPMUs = [](uint32 groupnr, int32 M2Mbus, int32 cpu_family_model, const std::vector<std::pair<uint32, uint32> > & M2MRegisterLocation, UncorePMUVector & m2mPMUs)
     {
         std::vector<std::shared_ptr<PciHandleType> > m2mHandles;
 
@@ -7791,7 +7900,7 @@ void ServerUncorePMUs::initDirect(uint32 socket_, const PCM * pcm)
 
         for (auto & handle : m2mHandles)
         {
-            switch (cpu_model)
+            switch (cpu_family_model)
             {
             case PCM::ICX:
             case PCM::SNOWRIDGE:
@@ -7830,21 +7939,21 @@ void ServerUncorePMUs::initDirect(uint32 socket_, const PCM * pcm)
             }
         }
     };
-    populateM2MPMUs(groupnr, M2Mbus, cpu_model, M2MRegisterLocation, m2mPMUs);
-    populateM2MPMUs(groupnr, M2Mbus, cpu_model, HBM_M2MRegisterLocation, hbm_m2mPMUs);
+    populateM2MPMUs(groupnr, M2Mbus, cpu_family_model, M2MRegisterLocation, m2mPMUs);
+    populateM2MPMUs(groupnr, M2Mbus, cpu_family_model, HBM_M2MRegisterLocation, hbm_m2mPMUs);
 
     int numChannels = 0;
     if (safe_getenv("PCM_NO_IMC_DISCOVERY") == std::string("1"))
     {
-        if (cpu_model == PCM::SPR || cpu_model == PCM::EMR)
+        if (cpu_family_model == PCM::SPR || cpu_family_model == PCM::EMR)
         {
             numChannels = 3;
         }
     }
-    if (cpu_model == PCM::SNOWRIDGE || cpu_model == PCM::ICX)
+    if (cpu_family_model == PCM::SNOWRIDGE || cpu_family_model == PCM::ICX)
     {
         numChannels = 2;
-        if (PCM::getCPUModelFromCPUID() == PCM::ICX_D)
+        if (PCM::getCPUFamilyModelFromCPUID() == PCM::ICX_D)
         {
             numChannels = 3;
         }
@@ -7898,7 +8007,7 @@ void ServerUncorePMUs::initDirect(uint32 socket_, const PCM * pcm)
     }
     else
     {
-        switch (cpu_model)
+        switch (cpu_family_model)
         {
             case PCM::SPR:
             case PCM::EMR:
@@ -7980,8 +8089,11 @@ void ServerUncorePMUs::initDirect(uint32 socket_, const PCM * pcm)
         }
     };
 
-    switch (cpu_model)
+    switch (cpu_family_model)
     {
+        case PCM::GRR:
+            initBHSiMCPMUs(2);
+            break;
         case PCM::GNR:
         case PCM::SRF:
             initBHSiMCPMUs(12);
@@ -7994,7 +8106,7 @@ void ServerUncorePMUs::initDirect(uint32 socket_, const PCM * pcm)
         throw std::exception();
     }
 
-    if (cpu_model == PCM::KNL)
+    if (cpu_family_model == PCM::KNL)
     {
         std::vector<std::shared_ptr<PciHandleType> > edcHandles;
 
@@ -8050,7 +8162,7 @@ void ServerUncorePMUs::initDirect(uint32 socket_, const PCM * pcm)
     }
     for (auto& handle : m3upiHandles)
     {
-        switch (cpu_model)
+        switch (cpu_family_model)
         {
         case PCM::ICX:
         case PCM::SPR:
@@ -8153,7 +8265,7 @@ void ServerUncorePMUs::initDirect(uint32 socket_, const PCM * pcm)
 
     if (pcm->getNumSockets() <= 4 && safe_getenv("PCM_NO_UPILL_DISCOVERY") != std::string("1"))
     {
-        switch (cpu_model)
+        switch (cpu_family_model)
         {
             // don't use the discovery on SPR to work-around the issue
 	    // mentioned in https://lore.kernel.org/lkml/20221129191023.936738-1-kan.liang@linux.intel.com/T/
@@ -8201,7 +8313,7 @@ void ServerUncorePMUs::initDirect(uint32 socket_, const PCM * pcm)
 
     if (xpiPMUs.empty()) for (auto & handle : qpiLLHandles)
     {
-        switch (cpu_model)
+        switch (cpu_family_model)
         {
         case PCM::SKX:
             xpiPMUs.push_back(
@@ -8735,7 +8847,7 @@ void ServerUncorePMUs::programServerUncoreMemoryMetrics(const ServerUncoreMemory
             }
             return true;
         };
-        switch(cpu_model)
+        switch(cpu_family_model)
         {
         case PCM::KNL:
             MCCntConfig[EventPosition::READ] = MC_CH_PCI_PMON_CTL_EVENT(0x03) + MC_CH_PCI_PMON_CTL_UMASK(1);  // monitor reads on counter 0: CAS.RD
@@ -8771,6 +8883,7 @@ void ServerUncorePMUs::programServerUncoreMemoryMetrics(const ServerUncoreMemory
             }
             break;
         case PCM::GNR:
+        case PCM::GRR:
         case PCM::SRF:
             if (metrics == PmemMemoryMode)
             {
@@ -8799,7 +8912,7 @@ void ServerUncorePMUs::programServerUncoreMemoryMetrics(const ServerUncoreMemory
             std::cerr << "PCM Error: invalid rankA value: " << rankA << "\n";
             return;
         }
-        switch(cpu_model)
+        switch(cpu_family_model)
         {
         case PCM::IVYTOWN:
             MCCntConfig[EventPosition::READ_RANK_A] = MC_CH_PCI_PMON_CTL_EVENT((0xb0 + rankA)) + MC_CH_PCI_PMON_CTL_UMASK(0xff); // RD_CAS_RANK(rankA) all banks
@@ -8829,7 +8942,7 @@ void ServerUncorePMUs::programServerUncoreMemoryMetrics(const ServerUncoreMemory
             EDCCntConfig[EventPosition::WRITE] = MC_CH_PCI_PMON_CTL_EVENT(0x02) + MC_CH_PCI_PMON_CTL_UMASK(1);  // monitor reads on counter 1: WPQ
             break;
         default:
-            std::cerr << "PCM Error: your processor " << pcm->getCPUBrandString() << " model " << cpu_model << " does not support the required performance events \n";
+            std::cerr << "PCM Error: your processor " << pcm->getCPUBrandString() << " ID 0x" << std::hex << cpu_family_model << std::dec << " does not support the required performance events \n";
             return;
         }
     }
@@ -8847,7 +8960,7 @@ void ServerUncorePMUs::program()
     PCM * pcm = PCM::getInstance();
     uint32 MCCntConfig[4] = {0, 0, 0, 0};
     uint32 EDCCntConfig[4] = {0, 0, 0, 0};
-    switch(cpu_model)
+    switch(cpu_family_model)
     {
     case PCM::KNL:
         MCCntConfig[EventPosition::READ] = MC_CH_PCI_PMON_CTL_EVENT(0x03) + MC_CH_PCI_PMON_CTL_UMASK(1);  // monitor reads on counter 0: CAS_COUNT.RD
@@ -8866,6 +8979,7 @@ void ServerUncorePMUs::program()
         EDCCntConfig[EventPosition::WRITE] = MCCntConfig[EventPosition::WRITE] = MC_CH_PCI_PMON_CTL_EVENT(0x05) + MC_CH_PCI_PMON_CTL_UMASK(0xf0); // monitor writes on counter 1: CAS_COUNT.WR
         break;
     case PCM::GNR:
+    case PCM::GRR:
     case PCM::SRF:
         MCCntConfig[EventPosition::READ] = MC_CH_PCI_PMON_CTL_EVENT(0x05) + MC_CH_PCI_PMON_CTL_UMASK(0xcf);  // monitor reads on counter 0: CAS_COUNT_SCH0.RD
         MCCntConfig[EventPosition::WRITE] = MC_CH_PCI_PMON_CTL_EVENT(0x05) + MC_CH_PCI_PMON_CTL_UMASK(0xf0); // monitor writes on counter 1: CAS_COUNT_SCH0.WR
@@ -8889,7 +9003,7 @@ void ServerUncorePMUs::program()
     programM2M();
 
     uint32 event[4];
-    if (PCM::hasUPI(cpu_model))
+    if (PCM::hasUPI(cpu_family_model))
     {
         // monitor TxL0_POWER_CYCLES
         event[0] = Q_P_PCI_PMON_CTL_EVENT(0x26);
@@ -8917,7 +9031,7 @@ void ServerUncorePMUs::program()
 
 void ServerUncorePMUs::programXPI(const uint32 * event)
 {
-    const uint32 extra = PCM::hasUPI(cpu_model) ? UNC_PMON_UNIT_CTL_RSV : UNC_PMON_UNIT_CTL_FRZ_EN;
+    const uint32 extra = PCM::hasUPI(cpu_family_model) ? UNC_PMON_UNIT_CTL_RSV : UNC_PMON_UNIT_CTL_FRZ_EN;
     for (uint32 i = 0; i < (uint32)xpiPMUs.size(); ++i)
     {
         // QPI LL PMU
@@ -8995,9 +9109,10 @@ uint64 ServerUncorePMUs::getImcReadsForChannels(uint32 beginChannel, uint32 endC
     for (uint32 i = beginChannel; i < endChannel && i < imcPMUs.size(); ++i)
     {
         result += getMCCounter(i, EventPosition::READ);
-        switch (cpu_model)
+        switch (cpu_family_model)
         {
             case PCM::GNR:
+            case PCM::GRR:
             case PCM::SRF:
                 result += getMCCounter(i, EventPosition::READ2);
                 break;
@@ -9012,9 +9127,10 @@ uint64 ServerUncorePMUs::getImcWrites()
     for (uint32 i = 0; i < (uint32)imcPMUs.size(); ++i)
     {
         result += getMCCounter(i, EventPosition::WRITE);
-        switch (cpu_model)
+        switch (cpu_family_model)
         {
             case PCM::GNR:
+            case PCM::GRR:
             case PCM::SRF:
                 result += getMCCounter(i, EventPosition::WRITE2);
                 break;
@@ -9099,7 +9215,7 @@ uint64 ServerUncorePMUs::getIncomingDataFlits(uint32 port)
     if (port >= (uint32)xpiPMUs.size())
         return 0;
 
-    if (PCM::hasUPI(cpu_model) == false)
+    if (PCM::hasUPI(cpu_family_model) == false)
     {
         drs = *xpiPMUs[port].counterValue[0];
     }
@@ -9115,7 +9231,7 @@ uint64 ServerUncorePMUs::getOutgoingFlits(uint32 port)
 
 uint64 ServerUncorePMUs::getUPIL0TxCycles(uint32 port)
 {
-    if (PCM::hasUPI(cpu_model))
+    if (PCM::hasUPI(cpu_family_model))
         return getQPILLCounter(port,0);
     return 0;
 }
@@ -9123,15 +9239,15 @@ uint64 ServerUncorePMUs::getUPIL0TxCycles(uint32 port)
 void ServerUncorePMUs::program_power_metrics(int mc_profile)
 {
     uint32 xPIEvents[4] = { 0,0,0,0 };
-    xPIEvents[ServerUncoreCounterState::EventPosition::xPI_TxL0P_POWER_CYCLES] = (uint32)Q_P_PCI_PMON_CTL_EVENT((PCM::hasUPI(cpu_model) ? 0x27 : 0x0D)); // L0p Tx Cycles (TxL0P_POWER_CYCLES)
-    xPIEvents[ServerUncoreCounterState::EventPosition::xPI_L1_POWER_CYCLES] = (uint32)Q_P_PCI_PMON_CTL_EVENT((PCM::hasUPI(cpu_model) ? 0x21 : 0x12)); // L1 Cycles (L1_POWER_CYCLES)
-    xPIEvents[ServerUncoreCounterState::EventPosition::xPI_CLOCKTICKS] = (uint32)Q_P_PCI_PMON_CTL_EVENT((PCM::hasUPI(cpu_model) ? 0x01 : 0x14)); // QPI/UPI clocks (CLOCKTICKS)
+    xPIEvents[ServerUncoreCounterState::EventPosition::xPI_TxL0P_POWER_CYCLES] = (uint32)Q_P_PCI_PMON_CTL_EVENT((PCM::hasUPI(cpu_family_model) ? 0x27 : 0x0D)); // L0p Tx Cycles (TxL0P_POWER_CYCLES)
+    xPIEvents[ServerUncoreCounterState::EventPosition::xPI_L1_POWER_CYCLES] = (uint32)Q_P_PCI_PMON_CTL_EVENT((PCM::hasUPI(cpu_family_model) ? 0x21 : 0x12)); // L1 Cycles (L1_POWER_CYCLES)
+    xPIEvents[ServerUncoreCounterState::EventPosition::xPI_CLOCKTICKS] = (uint32)Q_P_PCI_PMON_CTL_EVENT((PCM::hasUPI(cpu_family_model) ? 0x01 : 0x14)); // QPI/UPI clocks (CLOCKTICKS)
 
     programXPI(xPIEvents);
 
     uint32 MCCntConfig[4] = {0,0,0,0};
     unsigned int UNC_M_POWER_CKE_CYCLES = 0x83;
-    switch (cpu_model)
+    switch (cpu_family_model)
     {
         case PCM::ICX:
         case PCM::SNOWRIDGE:
@@ -9144,7 +9260,7 @@ void ServerUncorePMUs::program_power_metrics(int mc_profile)
             break;
     }
     unsigned int UNC_M_POWER_CHANNEL_PPD_CYCLES = 0x85;
-    switch (cpu_model)
+    switch (cpu_family_model)
     {
         case PCM::SRF:
         case PCM::GNR:
@@ -9153,7 +9269,7 @@ void ServerUncorePMUs::program_power_metrics(int mc_profile)
             break;
     }
     unsigned int UNC_M_SELF_REFRESH_ENTER_SUCCESS_CYCLES_UMASK = 0;
-    switch (cpu_model)
+    switch (cpu_family_model)
     {
         case PCM::SRF:
         case PCM::GNR:
@@ -9209,7 +9325,7 @@ void enableAndResetMCFixedCounter(UncorePMU& pmu)
 
 void ServerUncorePMUs::programIMC(const uint32 * MCCntConfig)
 {
-    const uint32 extraIMC = (cpu_model == PCM::SKX)?UNC_PMON_UNIT_CTL_RSV:UNC_PMON_UNIT_CTL_FRZ_EN;
+    const uint32 extraIMC = (cpu_family_model == PCM::SKX)?UNC_PMON_UNIT_CTL_RSV:UNC_PMON_UNIT_CTL_FRZ_EN;
 
     for (uint32 i = 0; i < (uint32)imcPMUs.size(); ++i)
     {
@@ -9229,7 +9345,7 @@ void ServerUncorePMUs::programEDC(const uint32 * EDCCntConfig)
         edcPMUs[i].initFreeze(UNC_PMON_UNIT_CTL_FRZ_EN);
 
         // HBM clocks enabled by default
-        if (cpu_model == PCM::KNL)
+        if (cpu_family_model == PCM::KNL)
         {
             *edcPMUs[i].fixedCounterControl = EDC_CH_PCI_PMON_FIXED_CTL_EN;
         }
@@ -9245,7 +9361,7 @@ void ServerUncorePMUs::programEDC(const uint32 * EDCCntConfig)
 void ServerUncorePMUs::programM2M()
 {
     uint64 cfg[4] = {0, 0, 0, 0};
-    switch (cpu_model)
+    switch (cpu_family_model)
     {
     case PCM::SPR:
     case PCM::EMR:
@@ -9352,7 +9468,7 @@ void ServerUncorePMUs::freezeCounters()
     {
         for (auto& pmu : *pmuVector)
         {
-            pmu.freeze((cpu_model == PCM::SKX) ? UNC_PMON_UNIT_CTL_RSV : UNC_PMON_UNIT_CTL_FRZ_EN);
+            pmu.freeze((cpu_family_model == PCM::SKX) ? UNC_PMON_UNIT_CTL_RSV : UNC_PMON_UNIT_CTL_FRZ_EN);
         }
     }
 }
@@ -9363,7 +9479,7 @@ void ServerUncorePMUs::unfreezeCounters()
     {
         for (auto& pmu : *pmuVector)
         {
-            pmu.unfreeze((cpu_model == PCM::SKX) ? UNC_PMON_UNIT_CTL_RSV : UNC_PMON_UNIT_CTL_FRZ_EN);
+            pmu.unfreeze((cpu_family_model == PCM::SKX) ? UNC_PMON_UNIT_CTL_RSV : UNC_PMON_UNIT_CTL_FRZ_EN);
         }
     }
 }
@@ -9588,7 +9704,7 @@ void ServerUncorePMUs::cleanupMemTest(const ServerUncorePMUs::MemTestParam & par
     }
 }
 
-uint64 ServerUncorePMUs::computeQPISpeed(const uint32 core_nr, const int cpumodel)
+uint64 ServerUncorePMUs::computeQPISpeed(const uint32 core_nr, const int cpufamilymodel)
 {
     if(qpi_speed.empty())
     {
@@ -9597,9 +9713,9 @@ uint64 ServerUncorePMUs::computeQPISpeed(const uint32 core_nr, const int cpumode
         qpi_speed.resize(getNumQPIPorts());
 
         auto getSpeed = [&] (size_t i) {
-           if (PCM::hasUPI(cpumodel) == false && i == 1) return 0ULL; // link 1 should have the same speed as link 0, skip it
+           if (PCM::hasUPI(cpufamilymodel) == false && i == 1) return 0ULL; // link 1 should have the same speed as link 0, skip it
            uint64 result = 0;
-           if (PCM::hasUPI(cpumodel) == false && i < XPIRegisterLocation.size())
+           if (PCM::hasUPI(cpufamilymodel) == false && i < XPIRegisterLocation.size())
            {
                PciHandleType reg(groupnr,UPIbus, XPIRegisterLocation[i].first, QPI_PORT0_MISC_REGISTER_FUNC_ADDR);
                uint32 value = 0;
@@ -9609,7 +9725,7 @@ uint64 ServerUncorePMUs::computeQPISpeed(const uint32 core_nr, const int cpumode
            }
            std::unordered_map<uint32, size_t> UPISpeedMap{};
            std::pair<uint32, uint32> regBits{};
-           switch (cpumodel)
+           switch (cpufamilymodel)
            {
            case PCM::GNR:
            case PCM::SRF:
@@ -9652,7 +9768,7 @@ uint64 ServerUncorePMUs::computeQPISpeed(const uint32 core_nr, const int cpumode
            }
            if(result == 0ULL)
            {
-               if (PCM::hasUPI(cpumodel) == false)
+               if (PCM::hasUPI(cpufamilymodel) == false)
                    std::cerr << "Warning: QPI_RATE_STATUS register is not available on port " << i << ". Computing QPI speed using a measurement loop.\n";
 
                // compute qpi speed
@@ -9672,8 +9788,8 @@ uint64 ServerUncorePMUs::computeQPISpeed(const uint32 core_nr, const int cpumode
                uint64 endClocks = getQPIClocks((uint32)i);
                cleanupMemTest(param);
 
-               result = (uint64(double(endClocks - startClocks) * PCM::getBytesPerLinkCycle(cpumodel) * double(timerGranularity) / double(endTSC - startTSC)));
-               if(cpumodel == PCM::HASWELLX || cpumodel == PCM::BDX) /* BDX_DE does not have QPI. */{
+               result = (uint64(double(endClocks - startClocks) * PCM::getBytesPerLinkCycle(cpufamilymodel) * double(timerGranularity) / double(endTSC - startTSC)));
+               if(cpufamilymodel == PCM::HASWELLX || cpufamilymodel == PCM::BDX) /* BDX_DE does not have QPI. */{
                   result /=2; // HSX runs QPI clocks with doubled speed
                }
            }
@@ -9684,9 +9800,9 @@ uint64 ServerUncorePMUs::computeQPISpeed(const uint32 core_nr, const int cpumode
              getSpeedsAsync.push_back(std::async(std::launch::async, getSpeed, i));
          }
          for (size_t i = 0; i < getNumQPIPorts(); ++i) {
-             qpi_speed[i] = (PCM::hasUPI(cpumodel) == false && i==1)? qpi_speed[0] : getSpeedsAsync[i].get(); // link 1 does not have own speed register, it runs with the speed of link 0
+             qpi_speed[i] = (PCM::hasUPI(cpufamilymodel) == false && i==1)? qpi_speed[0] : getSpeedsAsync[i].get(); // link 1 does not have own speed register, it runs with the speed of link 0
          }
-         if (PCM::hasUPI(cpumodel))
+         if (PCM::hasUPI(cpufamilymodel))
          {
              // check the speed of link 3
              if(qpi_speed.size() == 3 && qpi_speed[2] == 0)
@@ -9718,7 +9834,8 @@ void ServerUncorePMUs::reportQPISpeed() const
 
 uint64 PCM::CX_MSR_PMON_CTRY(uint32 Cbo, uint32 Ctr) const
 {
-    switch (cpu_model) {
+    switch (cpu_family_model)
+    {
     case JAKETOWN:
     case IVYTOWN:
         return JKT_C0_MSR_PMON_CTR0 + (JKTIVT_CBO_MSR_STEP * Cbo) + Ctr;
@@ -9736,6 +9853,7 @@ uint64 PCM::CX_MSR_PMON_CTRY(uint32 Cbo, uint32 Ctr) const
     case SPR:
     case EMR:
     case GNR:
+    case GRR:
     case SRF:
         return SPR_CHA0_MSR_PMON_CTR0 + SPR_CHA_MSR_STEP * Cbo + Ctr;
 
@@ -9746,7 +9864,8 @@ uint64 PCM::CX_MSR_PMON_CTRY(uint32 Cbo, uint32 Ctr) const
 
 uint64 PCM::CX_MSR_PMON_BOX_FILTER(uint32 Cbo) const
 {
-    switch (cpu_model) {
+    switch (cpu_family_model)
+    {
     case JAKETOWN:
     case IVYTOWN:
         return JKT_C0_MSR_PMON_BOX_FILTER + (JKTIVT_CBO_MSR_STEP * Cbo);
@@ -9766,6 +9885,7 @@ uint64 PCM::CX_MSR_PMON_BOX_FILTER(uint32 Cbo) const
     case SPR:
     case EMR:
     case GNR:
+    case GRR:
     case SRF:
         return SPR_CHA0_MSR_PMON_BOX_FILTER + SPR_CHA_MSR_STEP * Cbo;
 
@@ -9776,7 +9896,7 @@ uint64 PCM::CX_MSR_PMON_BOX_FILTER(uint32 Cbo) const
 
 uint64 PCM::CX_MSR_PMON_BOX_FILTER1(uint32 Cbo) const
 {
-    switch (cpu_model) {
+    switch (cpu_family_model) {
     case IVYTOWN:
         return IVT_C0_MSR_PMON_BOX_FILTER1 + (JKTIVT_CBO_MSR_STEP * Cbo);
 
@@ -9792,7 +9912,7 @@ uint64 PCM::CX_MSR_PMON_BOX_FILTER1(uint32 Cbo) const
 }
 uint64 PCM::CX_MSR_PMON_CTLY(uint32 Cbo, uint32 Ctl) const
 {
-    switch (cpu_model) {
+    switch (cpu_family_model) {
     case JAKETOWN:
     case IVYTOWN:
         return JKT_C0_MSR_PMON_CTL0 + (JKTIVT_CBO_MSR_STEP * Cbo) + Ctl;
@@ -9810,6 +9930,7 @@ uint64 PCM::CX_MSR_PMON_CTLY(uint32 Cbo, uint32 Ctl) const
     case SPR:
     case EMR:
     case GNR:
+    case GRR:
     case SRF:
         return SPR_CHA0_MSR_PMON_CTL0 + SPR_CHA_MSR_STEP * Cbo + Ctl;
 
@@ -9820,7 +9941,7 @@ uint64 PCM::CX_MSR_PMON_CTLY(uint32 Cbo, uint32 Ctl) const
 
 uint64 PCM::CX_MSR_PMON_BOX_CTL(uint32 Cbo) const
 {
-    switch (cpu_model) {
+    switch (cpu_family_model) {
     case JAKETOWN:
     case IVYTOWN:
         return JKT_C0_MSR_PMON_BOX_CTL + (JKTIVT_CBO_MSR_STEP * Cbo);
@@ -9840,6 +9961,7 @@ uint64 PCM::CX_MSR_PMON_BOX_CTL(uint32 Cbo) const
     case SPR:
     case EMR:
     case GNR:
+    case GRR:
     case SRF:
         return SPR_CHA0_MSR_PMON_BOX_CTRL + SPR_CHA_MSR_STEP * Cbo;
 
@@ -9913,8 +10035,9 @@ uint32 PCM::getMaxNumOfCBoxesInternal() const
     }
     const auto refCore = socketRefCore[0];
     uint64 val = 0;
-    switch (cpu_model)
+    switch (cpu_family_model)
     {
+    case GRR:
     case GNR:
     case SRF:
         {
@@ -9998,14 +10121,14 @@ uint32 PCM::getMaxNumOfIIOStacks() const
 
 void PCM::programCboOpcodeFilter(const uint32 opc0, UncorePMU & pmu, const uint32 nc_, const uint32 opc1, const uint32 loc, const uint32 rem)
 {
-    if(JAKETOWN == cpu_model)
+    if (JAKETOWN == cpu_family_model)
     {
         *pmu.filter[0] = JKT_CBO_MSR_PMON_BOX_FILTER_OPC(opc0);
 
-    } else if(IVYTOWN == cpu_model || HASWELLX == cpu_model || BDX_DE == cpu_model || BDX == cpu_model)
+    } else if (IVYTOWN == cpu_family_model || HASWELLX == cpu_family_model || BDX_DE == cpu_family_model || BDX == cpu_family_model)
     {
         *pmu.filter[1] = IVTHSX_CBO_MSR_PMON_BOX_FILTER1_OPC(opc0);
-    } else if(SKX == cpu_model)
+    } else if (SKX == cpu_family_model)
     {
         *pmu.filter[1] = SKX_CHA_MSR_PMON_BOX_FILTER1_OPC0(opc0) +
                 SKX_CHA_MSR_PMON_BOX_FILTER1_OPC1(opc1) +
@@ -10017,7 +10140,7 @@ void PCM::programCboOpcodeFilter(const uint32 opc0, UncorePMU & pmu, const uint3
     }
     else
     {
-        std::cerr << "ERROR: programCboOpcodeFilter function is not implemented for cpu model " << cpu_model << std::endl;
+        std::cerr << "ERROR: programCboOpcodeFilter function is not implemented for cpu family " << cpu_family << " model " << cpu_model_private << std::endl;
         throw std::exception();
     }
 }
@@ -10028,8 +10151,11 @@ void PCM::programIIOCounters(uint64 rawEvents[4], int IIOStack)
     if (IIOStack == -1)
     {
         int stacks_count;
-        switch (getCPUModel())
+        switch (getCPUFamilyModel())
         {
+        case PCM::GRR:
+            stacks_count = GRR_M2IOSF_NUM;
+            break;
         case PCM::GNR:
         case PCM::SRF:
             stacks_count = BHS_M2IOSF_NUM;
@@ -10123,9 +10249,10 @@ void PCM::programPCIeEventGroup(eventGroup_t &eventGroup)
     uint64 events[4] = {0};
     uint64 umask[4] = {0};
 
-    switch (cpu_model)
+    switch (cpu_family_model)
     {
         case PCM::GNR:
+        case PCM::GRR:
         case PCM::SRF:
         case PCM::SPR:
         case PCM::EMR:
@@ -10173,18 +10300,19 @@ void PCM::programCbo(const uint64 * events, const uint32 opCode, const uint32 nc
         {
             pmu.initFreeze(UNC_PMON_UNIT_CTL_FRZ_EN);
 
-            if (    ICX != cpu_model
-                &&  SNOWRIDGE != cpu_model
-                &&  SPR != cpu_model
-                &&  EMR != cpu_model
-                &&  GNR != cpu_model
-                &&  SRF != cpu_model
+            if (    ICX != cpu_family_model
+                &&  SNOWRIDGE != cpu_family_model
+                &&  SPR != cpu_family_model
+                &&  EMR != cpu_family_model
+                &&  GNR != cpu_family_model
+                &&  SRF != cpu_family_model
+                &&  GRR != cpu_family_model
                 )
             {
                 programCboOpcodeFilter(opCode, pmu, nc_, 0, loc, rem);
             }
 
-            if ((HASWELLX == cpu_model || BDX_DE == cpu_model || BDX == cpu_model || SKX == cpu_model) && llc_lookup_tid_filter != 0)
+            if ((HASWELLX == cpu_family_model || BDX_DE == cpu_family_model || BDX == cpu_family_model || SKX == cpu_family_model) && llc_lookup_tid_filter != 0)
                 *pmu.filter[0] = llc_lookup_tid_filter;
 
             PCM::program(pmu, events, events + ServerUncoreCounterState::maxCounters, UNC_PMON_UNIT_CTL_FRZ_EN);
@@ -10437,7 +10565,7 @@ bool PCM::supportIDXAccelDev() const
 {
     bool retval = false;
 
-    switch (this->getCPUModel())
+    switch (this->getCPUFamilyModel())
     {
         case PCM::SPR:
         case PCM::EMR:
@@ -10522,7 +10650,7 @@ void PCM::initLLCReadMissLatencyEvents(uint64 * events, uint32 & opCode)
         return;
     }
     uint64 umask = 3ULL; // MISS_OPCODE
-    switch (cpu_model)
+    switch (cpu_family_model)
     {
         case ICX:
         case SPR:
@@ -10535,7 +10663,7 @@ void PCM::initLLCReadMissLatencyEvents(uint64 * events, uint32 & opCode)
     }
 
     uint64 umask_ext = 0;
-    switch (cpu_model)
+    switch (cpu_family_model)
     {
         case ICX:
             umask_ext = 0xC817FE;
@@ -10552,7 +10680,7 @@ void PCM::initLLCReadMissLatencyEvents(uint64 * events, uint32 & opCode)
     events[EventPosition::TOR_OCCUPANCY] = CBO_MSR_PMON_CTL_EVENT(0x36) + all_umasks; // TOR_OCCUPANCY (must be on counter 0)
     events[EventPosition::TOR_INSERTS] = CBO_MSR_PMON_CTL_EVENT(0x35) + all_umasks; // TOR_INSERTS
 
-    opCode = (SKX == cpu_model) ? 0x202 : 0x182;
+    opCode = (SKX == cpu_family_model) ? 0x202 : 0x182;
 }
 
 void PCM::programCbo()
@@ -10623,7 +10751,7 @@ UncorePMU::UncorePMU(const HWRegisterPtr& unitControl_,
     const HWRegisterPtr& filter0,
     const HWRegisterPtr& filter1
 ) :
-    cpu_model_(0),
+    cpu_family_model_(0),
     unitControl(unitControl_),
     counterControl{ counterControl0, counterControl1, counterControl2, counterControl3 },
     counterValue{ counterValue0, counterValue1, counterValue2, counterValue3 },
@@ -10642,7 +10770,7 @@ UncorePMU::UncorePMU(const HWRegisterPtr& unitControl_,
     const HWRegisterPtr& filter0,
     const HWRegisterPtr& filter1
 ):
-    cpu_model_(0),
+    cpu_family_model_(0),
     unitControl(unitControl_),
     counterControl{counterControl_},
     counterValue{counterValue_},
@@ -10653,13 +10781,13 @@ UncorePMU::UncorePMU(const HWRegisterPtr& unitControl_,
     assert(counterControl.size() == counterValue.size());
 }
 
-uint32 UncorePMU::getCPUModel()
+uint32 UncorePMU::getCPUFamilyModel()
 {
-    if (cpu_model_ == 0)
+    if (cpu_family_model_ == 0)
     {
-        cpu_model_ = PCM::getInstance()->getCPUModel();
+        cpu_family_model_ = PCM::getInstance()->getCPUFamilyModel();
     }
-    return cpu_model_;
+    return cpu_family_model_;
 }
 
 void UncorePMU::cleanup()
@@ -10674,11 +10802,12 @@ void UncorePMU::cleanup()
 
 void UncorePMU::freeze(const uint32 extra)
 {
-    switch (getCPUModel())
+    switch (getCPUFamilyModel())
     {
     case PCM::SPR:
     case PCM::EMR:
     case PCM::GNR:
+    case PCM::GRR:
     case PCM::SRF:
         *unitControl = SPR_UNC_PMON_UNIT_CTL_FRZ;
         break;
@@ -10689,11 +10818,12 @@ void UncorePMU::freeze(const uint32 extra)
 
 void UncorePMU::unfreeze(const uint32 extra)
 {
-    switch (getCPUModel())
+    switch (getCPUFamilyModel())
     {
     case PCM::SPR:
     case PCM::EMR:
     case PCM::GNR:
+    case PCM::GRR:
     case PCM::SRF:
         *unitControl = 0;
         break;
@@ -10709,11 +10839,12 @@ bool UncorePMU::initFreeze(const uint32 extra, const char* xPICheckMsg)
         return true; // this PMU does not have unit control register => no op
     }
 
-    switch (getCPUModel())
+    switch (getCPUFamilyModel())
     {
         case PCM::SPR:
         case PCM::EMR:
         case PCM::GNR:
+        case PCM::GRR:
         case PCM::SRF:
             *unitControl = SPR_UNC_PMON_UNIT_CTL_FRZ; // freeze
             *unitControl = SPR_UNC_PMON_UNIT_CTL_FRZ + SPR_UNC_PMON_UNIT_CTL_RST_CONTROL; // freeze and reset control registers
@@ -10748,11 +10879,12 @@ bool UncorePMU::initFreeze(const uint32 extra, const char* xPICheckMsg)
 
 void UncorePMU::resetUnfreeze(const uint32 extra)
 {
-    switch (getCPUModel())
+    switch (getCPUFamilyModel())
     {
     case PCM::SPR:
     case PCM::EMR:
     case PCM::GNR:
+    case PCM::GRR:
     case PCM::SRF:
         *unitControl = SPR_UNC_PMON_UNIT_CTL_FRZ + SPR_UNC_PMON_UNIT_CTL_RST_COUNTERS; // freeze and reset counter registers
         *unitControl = 0; // unfreeze
@@ -10779,7 +10911,7 @@ IDX_PMU::IDX_PMU(const bool perfMode_,
         const std::vector<HWRegisterPtr> & counterFilterPGSZ,
         const std::vector<HWRegisterPtr> & counterFilterXFERSZ
     ) : 
-    cpu_model_(0),
+    cpu_family_model_(0),
     perf_mode_(perfMode_),
     numa_node_(numaNode_),
     socket_id_(socketId_),
@@ -10797,14 +10929,14 @@ IDX_PMU::IDX_PMU(const bool perfMode_,
     assert(counterControl.size() == counterValue.size());
 }
 
-uint32 IDX_PMU::getCPUModel()
+uint32 IDX_PMU::getCPUFamilyModel()
 {
-    if (cpu_model_ == 0)
+    if (cpu_family_model_ == 0)
     {
-        cpu_model_ = PCM::getInstance()->getCPUModel();
+        cpu_family_model_ = PCM::getInstance()->getCPUFamilyModel();
     }
 
-    return cpu_model_;
+    return cpu_family_model_;
 }
 
 void IDX_PMU::cleanup()
@@ -10896,7 +11028,7 @@ void PCM::getIIOCounterStates(int socket, int IIOStack, IIOCounterState * result
 
 void PCM::setupCustomCoreEventsForNuma(PCM::ExtendedCustomCoreEventDescription& conf) const
 {
-    switch (this->getCPUModel())
+    switch (this->getCPUFamilyModel())
     {
     case PCM::WESTMERE_EX:
         // OFFCORE_RESPONSE.ANY_REQUEST.LOCAL_DRAM:  Offcore requests satisfied by the local DRAM
@@ -10938,6 +11070,7 @@ void PCM::setupCustomCoreEventsForNuma(PCM::ExtendedCustomCoreEventDescription& 
         break;
     case PCM::SPR:
     case PCM::EMR:
+    case PCM::GNR:
         std::cout << "INFO: Monitored accesses include demand + L2 cache prefetcher, code read and RFO.\n";
          // OCR.READS_TO_CORE.LOCAL_DRAM
         conf.OffcoreResponseMsrValue[0] = 0x104004477;
