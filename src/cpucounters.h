@@ -1596,6 +1596,7 @@ public:
     typedef std::pair<std::shared_ptr<MMIORange>, uint32> MMIORegisterEncoding; // MMIORange shared ptr, offset
     struct MMIORegisterEncodingHash : public PCICFGRegisterEncodingHash
     {
+        // cppcheck-suppress duplInheritedMember
         std::size_t operator()(const RawEventEncoding& e) const
         {
             std::size_t h4 = std::hash<uint64>{}(e[MMIOEventPosition::membar_bits1]);
@@ -1605,6 +1606,7 @@ public:
     };
     struct MMIORegisterEncodingCmp : public PCICFGRegisterEncodingCmp
     {
+        // cppcheck-suppress duplInheritedMember
         bool operator ()(const RawEventEncoding& a, const RawEventEncoding& b) const
         {
             return PCICFGRegisterEncodingCmp::operator()(a,b)
@@ -1664,6 +1666,7 @@ public:
     std::pair<unsigned, unsigned> getOCREventNr(const int event, const unsigned coreID) const
     {
        assert (coreID < topology.size());
+       const auto eCoreOCREvent = std::make_pair(OFFCORE_RESPONSE_0_EVTNR, event + 1);
        if (hybrid)
        {
             switch (cpu_family_model)
@@ -1675,7 +1678,7 @@ public:
             case ARL:
                 if (topology[coreID].core_type == TopologyEntry::Atom)
                 {
-                    return std::make_pair(OFFCORE_RESPONSE_0_EVTNR, event + 1);
+                    return eCoreOCREvent;
                 }
                 break;
             }
@@ -1685,6 +1688,7 @@ public:
        {
        case SPR:
        case EMR:
+       case GNR:
        case ADL: // ADL big core (GLC)
        case RPL:
        case MTL:
@@ -1692,6 +1696,22 @@ public:
        case ARL:
            useGLCOCREvent = true;
            break;
+
+       case ATOM:
+       case ATOM_2:
+       case CENTERTON:
+       case BAYTRAIL:
+       case AVOTON:
+       case CHERRYTRAIL:
+       case APOLLO_LAKE:
+       case GEMINI_LAKE:
+       case DENVERTON:
+       case SNOWRIDGE:
+       case ELKHART_LAKE:
+       case JASPER_LAKE:
+       case SRF:
+       case GRR:
+            return eCoreOCREvent;
        }
        switch (event)
        {
@@ -3926,6 +3946,7 @@ class SocketCounterState : public BasicCounterState, public UncoreCounterState
     friend class PCM;
 
 protected:
+    // cppcheck-suppress duplInheritedMember
     void readAndAggregate(std::shared_ptr<SafeMsrHandle> handle)
     {
         BasicCounterState::readAndAggregate(handle);
@@ -3933,6 +3954,7 @@ protected:
     }
 
 public:
+    // cppcheck-suppress duplInheritedMember
     SocketCounterState& operator += ( const BasicCounterState& ccs )
     {
         BasicCounterState::operator += ( ccs );
@@ -3940,6 +3962,7 @@ public:
         return *this;
     }
 
+    // cppcheck-suppress duplInheritedMember
     SocketCounterState& operator += ( const UncoreCounterState& ucs )
     {
         UncoreCounterState::operator += ( ucs );
@@ -3952,6 +3975,7 @@ public:
     SocketCounterState( SocketCounterState&& ) = default;
     SocketCounterState & operator = ( SocketCounterState&& ) = default;
 
+    // cppcheck-suppress duplInheritedMember
     SocketCounterState & operator = ( UncoreCounterState&& ucs ) {
         UncoreCounterState::operator = ( std::move(ucs) );
         return *this;
@@ -3982,6 +4006,7 @@ class SystemCounterState : public SocketCounterState
     std::unordered_map<PCM::RawEventEncoding, std::vector<uint64>, PCM::PMTRegisterEncodingHash2> PMTValues{};
 
 protected:
+    // cppcheck-suppress duplInheritedMember
     void readAndAggregate(std::shared_ptr<SafeMsrHandle> handle)
     {
         BasicCounterState::readAndAggregate(handle);
@@ -4021,6 +4046,7 @@ public:
     SystemCounterState( SystemCounterState&& ) = default;
     SystemCounterState & operator = ( SystemCounterState&& ) = default;
 
+    // cppcheck-suppress duplInheritedMember
     SystemCounterState & operator += ( const SocketCounterState& scs )
     {
         BasicCounterState::operator += ( scs );
@@ -4029,6 +4055,7 @@ public:
         return *this;
     }
 
+    // cppcheck-suppress duplInheritedMember
     SystemCounterState & operator += ( const UncoreCounterState& ucs )
     {
         UncoreCounterState::operator += ( ucs );

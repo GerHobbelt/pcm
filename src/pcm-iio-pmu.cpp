@@ -253,10 +253,8 @@ void PurleyPlatformMapping::getUboxBusNumbers(std::vector<uint32_t>& ubox)
                 pci_dev.bdf.busno = (uint8_t)bus;
                 pci_dev.bdf.devno = device;
                 pci_dev.bdf.funcno = function;
-                if (probe_pci(&pci_dev)) {
-                    if (pci_dev.isIntelDevice() && (pci_dev.device_id == SKX_SOCKETID_UBOX_DID)) {
-                        ubox.push_back(bus);
-                    }
+                if (probe_pci(&pci_dev) && pci_dev.isIntelDeviceById(SKX_SOCKETID_UBOX_DID)) {
+                    ubox.push_back(bus);
                 }
             }
         }
@@ -337,7 +335,7 @@ bool IPlatformMapping10Nm::getSadIdRootBusMap(uint32_t socket_id, std::map<uint8
                 pci_dev.bdf.busno = (uint8_t)bus;
                 pci_dev.bdf.devno = device;
                 pci_dev.bdf.funcno = function;
-                if (probe_pci(&pci_dev) && pci_dev.isIntelDevice() && (pci_dev.device_id == SNR_ICX_MESH2IIO_MMAP_DID)) {
+                if (probe_pci(&pci_dev) && pci_dev.isIntelDeviceById(SNR_ICX_MESH2IIO_MMAP_DID)) {
 
                     PciHandleType h(0, bus, device, function);
                     std::uint32_t sad_ctrl_cfg;
@@ -642,12 +640,10 @@ bool EagleStreamPlatformMapping::setChopValue()
 {
     for (uint16_t b = 0; b < 256; b++) {
         struct pci pci_dev(0, b, SPR_PCU_CR3_REG_DEVICE, SPR_PCU_CR3_REG_FUNCTION);
-        if (!probe_pci(&pci_dev)) {
+        if (!(probe_pci(&pci_dev) && pci_dev.isIntelDeviceById(SPR_PCU_CR3_DID))) {
             continue;
         }
-        if (!(pci_dev.isIntelDevice() && (pci_dev.device_id == SPR_PCU_CR3_DID))) {
-            continue;
-        }
+
         std::uint32_t capid4;
         PciHandleType h(0, b, SPR_PCU_CR3_REG_DEVICE, SPR_PCU_CR3_REG_FUNCTION);
         h.read32(SPR_CAPID4_OFFSET, &capid4);
@@ -682,7 +678,7 @@ bool EagleStreamPlatformMapping::getRootBuses(std::map<int, std::map<int, struct
                     if (!probe_pci(&pci_dev)) {
                         break;
                     }
-                    if (!(pci_dev.isIntelDevice() && (pci_dev.device_id == SPR_MSM_DEV_ID))) {
+                    if (!pci_dev.isIntelDeviceById(SPR_MSM_DEV_ID)) {
                         continue;
                     }
 
@@ -940,22 +936,20 @@ bool LoganvillePlatform::loganvilleDlbStackProbe(struct iio_stacks_on_socket& ii
 
     for (uint8_t bus = root_bus; bus < 255; bus++) {
         struct pci pci_dev(bus, 0x00, 0x00);
-        if (probe_pci(&pci_dev)) {
-            if ((pci_dev.isIntelDevice()) && (pci_dev.device_id == HQMV25_DID)) {
-                dlb_part.root_pci_dev = pci_dev;
-                // Check Virtual RPs for DLB
-                for (uint8_t device = 0; device < 2; device++) {
-                    for (uint8_t function = 0; function < 8; function++) {
-                        struct pci child_pci_dev(bus, device, function);
-                        if (probe_pci(&child_pci_dev)) {
-                            dlb_part.child_pci_devs.push_back(child_pci_dev);
-                        }
+        if (probe_pci(&pci_dev) && pci_dev.isIntelDeviceById(HQMV25_DID)) {
+            dlb_part.root_pci_dev = pci_dev;
+            // Check Virtual RPs for DLB
+            for (uint8_t device = 0; device < 2; device++) {
+                for (uint8_t function = 0; function < 8; function++) {
+                    struct pci child_pci_dev(bus, device, function);
+                    if (probe_pci(&child_pci_dev)) {
+                        dlb_part.child_pci_devs.push_back(child_pci_dev);
                     }
                 }
-                stack.parts.push_back(dlb_part);
-                iio_on_socket.stacks.push_back(stack);
-                return true;
             }
+            stack.parts.push_back(dlb_part);
+            iio_on_socket.stacks.push_back(stack);
+            return true;
         }
     }
 
@@ -1077,7 +1071,7 @@ bool Xeon6thNextGenPlatform::getRootBuses(std::map<int, std::map<int, struct bdf
                     if (!probe_pci(&pci_dev)) {
                         break;
                     }
-                    if (!(pci_dev.isIntelDevice() && (pci_dev.device_id == SPR_MSM_DEV_ID))) {
+                    if (!pci_dev.isIntelDeviceById(SPR_MSM_DEV_ID)) {
                         continue;
                     }
 
@@ -1194,28 +1188,20 @@ bool BirchStreamPlatform::birchStreamAcceleratorStackProbe(int unit, const struc
         return false;
     };
 
-    {
+    auto add_pci_part = [&](int domainno, int busno, int devno, int part_number) {
         struct iio_bifurcated_part part;
-        if (process_pci_dev(address.domainno, address.busno, 1, SRF_DSA_IAX_PART_NUMBER, part) ||
-            process_pci_dev(address.domainno, address.busno, 2, SRF_DSA_IAX_PART_NUMBER, part)) {
+        if (process_pci_dev(domainno, busno, devno, part_number, part)) {
             stack.parts.push_back(part);
         }
-    }
+    };
 
-    {
-        struct iio_bifurcated_part part;
-        if (process_pci_dev(address.domainno, address.busno + 1, 0, SRF_QAT_PART_NUMBER, part)) {
-            stack.parts.push_back(part);
-        }
-    }
+    add_pci_part(address.domainno, address.busno, 1, SRF_DSA_IAX_PART_NUMBER);
+    add_pci_part(address.domainno, address.busno, 2, SRF_DSA_IAX_PART_NUMBER);
 
-    {
-        /* Bus number for HQM is higher on 3 than DSA bus number */
-        struct iio_bifurcated_part part;
-        if (process_pci_dev(address.domainno, address.busno + 3, 0, SRF_HQM_PART_NUMBER, part)) {
-            stack.parts.push_back(part);
-        }
-    }
+    add_pci_part(address.domainno, address.busno + 1, 0, SRF_QAT_PART_NUMBER);
+
+    /* Bus number for HQM is higher on 3 than DSA bus number */
+    add_pci_part(address.domainno, address.busno + 3, 0, SRF_HQM_PART_NUMBER);
 
     if (!stack.parts.empty()) {
         iio_on_socket.stacks.push_back(stack);
@@ -1425,9 +1411,9 @@ int iio_evt_parse_handler(evt_cb_type cb_type, void *cb_ctx, counter &base_ctr, 
         context->ctr.divider = base_ctr.divider;
         context->ctr.h_id = base_ctr.h_id;
         context->ctr.v_id = base_ctr.v_id;
-        //std::cout << "line parse OK, ctrcfg=0x" << std::hex << context->ctr.ccr << ", h_event_name=" <<  base_ctr.h_event_name << ", v_event_name=" << base_ctr.v_event_name;
-        //std::cout << ", h_id=0x" << std::hex << base_ctr.h_id << ", v_id=0x" << std::hex << base_ctr.v_id;
-        //std::cout << ", idx=0x"<< std::hex << base_ctr.idx << ", multiplier=0x" << std::hex << base_ctr.multiplier << ", divider=0x" << std::hex << base_ctr.divider << std::dec << "\n";
+        DBG(4, "line parse OK, ctrcfg=0x", std::hex, context->ctr.ccr, ", h_event_name=",  base_ctr.h_event_name, ", v_event_name=", base_ctr.v_event_name);
+        DBG(4, ", h_id=0x", std::hex, base_ctr.h_id, ", v_id=0x", std::hex, base_ctr.v_id);
+        DBG(4, ", idx=0x", std::hex, base_ctr.idx, ", multiplier=0x", std::hex, base_ctr.multiplier, ", divider=0x", std::hex, base_ctr.divider, std::dec, "\n");
         context->ctrs.push_back(context->ctr);
     }
 
