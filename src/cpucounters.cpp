@@ -1140,6 +1140,7 @@ bool PCM::discoverSystemTopology()
                 pcm_cpuid(0x1F, subleaf, cpuid_args);
                 domain d;
                 d.type = (TopologyEntry::DomainTypeID)extract_bits_32(cpuid_args.reg.ecx, 8, 15);
+               DBG(1 , "pcm_cpuid 0x1F cpuid_args.reg.ecx = " , cpuid_args.reg.ecx , " d.type = ", d.type);
                 if (d.type == TopologyEntry::DomainTypeID::InvalidDomainTypeID)
                 {
                     break;
@@ -1482,7 +1483,8 @@ bool PCM::discoverSystemTopology()
     // use map to change apic socket id to the logical socket id
     for (int i = 0; (i < (int)num_cores) && (!socketIdMap.empty()); ++i)
     {
-        DBG(2, "socket_id: ", topology[i].socket_id, ", socketIdMap tells me: ", socketIdMap[topology[i].socket_id]);
+       DBG(2, "socket_id: ", topology[i].socket_id, ", socketIdMap tells me: ",
+                        (socketIdMap.find(topology[i].socket_id) == socketIdMap.end()) ? (std::string("N/A")): std::to_string(socketIdMap[topology[i].socket_id]));
         if(isCoreOnline((int32)i))
           topology[i].socket_id = socketIdMap[topology[i].socket_id];
     }
@@ -1495,15 +1497,40 @@ bool PCM::discoverSystemTopology()
         std::cerr << topology[i].socket_id << " " << topology[i].os_id << " " << topology[i].core_id << "\n";
     }
 #endif
-    if (threads_per_core == 0)
+    assert(threads_per_core == 0); // make sure it is not initialized yet
+    // copy the topology array to a temp object
+    auto sortedTopology = topology;
+    std::sort(sortedTopology.begin(), sortedTopology.end());
+    // find out max number of threads per core given that the topologyCopy is sorted now
+    assert(sortedTopology.size() > 0);
+    auto currentCore = sortedTopology.begin();
+    while (currentCore != sortedTopology.end())
     {
-        for (int i = 0; i < (int)num_cores; ++i)
+        if (currentCore->os_id == -1 || currentCore->core_id == -1 || currentCore->socket_id == -1) // offlined core
         {
-            if (topology[i].isSameCore( topology[0] ))
-                ++threads_per_core;
+            ++currentCore;
+            continue;
         }
-        assert(threads_per_core != 0);
+        break;
     }
+    assert(currentCore != sortedTopology.end());
+    int current_threads_per_core = 0;
+    for (auto firstCore = *currentCore; currentCore != sortedTopology.end(); ++currentCore)
+    {
+        DBG(3, "Examining core: os_id=", currentCore->os_id, ", core_id=", currentCore->core_id, ", socket_id=", currentCore->socket_id);
+        if (currentCore->isSameCore(firstCore))
+        {
+            ++current_threads_per_core;
+        }
+        else
+        {
+            threads_per_core = (std::max)(threads_per_core, current_threads_per_core);
+            firstCore = *currentCore;
+            current_threads_per_core = 1;
+        }
+    }
+    threads_per_core = (std::max)(threads_per_core, current_threads_per_core);
+    assert(threads_per_core != 0);
     if(num_phys_cores_per_socket == 0 && num_cores == num_online_cores) num_phys_cores_per_socket = num_cores / num_sockets / threads_per_core;
     if(num_online_cores == 0) num_online_cores = num_cores;
 
@@ -4388,6 +4415,7 @@ PCM::ErrorCode PCM::programCoreCounters(const int i /* core */,
 
         MSR[i]->write(IA32_PERF_GLOBAL_OVF_CTRL, value);
         MSR[i]->write(IA32_CR_PERF_GLOBAL_CTRL, value);
+       DBG(3, "core_id = ", i, " wrote IA32_PERF_GLOBAL_OVF_CTRL and IA32_CR_PERF_GLOBAL_CTRL = 0x", std::hex, value, std::dec);
     }
 #ifdef PCM_USE_PERF
     else
@@ -5654,7 +5682,7 @@ void BasicCounterState::readAndAggregate(std::shared_ptr<SafeMsrHandle> msr)
     {
         {
             msr->read(IA32_PERF_GLOBAL_STATUS, &overflows); // read overflows
-            DBG(3,  "Debug " , core_id , " IA32_PERF_GLOBAL_STATUS: " , overflows);
+            DBG(3,  "core_id = " , core_id , " IA32_PERF_GLOBAL_STATUS: " , overflows);
 
             msr->read(INST_RETIRED_ADDR, &cInstRetiredAny);
             msr->read(CPU_CLK_UNHALTED_THREAD_ADDR, &cCpuClkUnhaltedThread);
@@ -5673,6 +5701,7 @@ void BasicCounterState::readAndAggregate(std::shared_ptr<SafeMsrHandle> msr)
             msr->lock();
             msr->read(PERF_METRICS_ADDR, &perfMetrics);
             msr->read(TOPDOWN_SLOTS_ADDR, &slots);
+           DBG(3,  "core_id = " , core_id , " PERF_METRICS = ", perfMetrics, " TOPDOWN_SLOTS = ", slots);
             msr->write(PERF_METRICS_ADDR, 0);
             msr->write(TOPDOWN_SLOTS_ADDR, 0);
             cFrontendBoundSlots = extract_bits(perfMetrics, 16, 23);
@@ -5687,22 +5716,22 @@ void BasicCounterState::readAndAggregate(std::shared_ptr<SafeMsrHandle> msr)
                 cHeavyOpsSlots = extract_bits(perfMetrics,    32 + 0*8, 32 + 0*8 + 7);
             }
             const double total = double(cFrontendBoundSlots + cBadSpeculationSlots + cBackendBoundSlots + cRetiringSlots);
-            if (total != 0)
+            if (true)
             {
-                cFrontendBoundSlots = m->FrontendBoundSlots[core_id] += uint64((double(cFrontendBoundSlots) / total) * double(slots));
-                cBadSpeculationSlots = m->BadSpeculationSlots[core_id] += uint64((double(cBadSpeculationSlots) / total) * double(slots));
-                cBackendBoundSlots = m->BackendBoundSlots[core_id] += uint64((double(cBackendBoundSlots) / total) * double(slots));
-                cRetiringSlots = m->RetiringSlots[core_id] += uint64((double(cRetiringSlots) / total) * double(slots));
+                cFrontendBoundSlots = m->FrontendBoundSlots[core_id] += (total != 0) ? uint64((double(cFrontendBoundSlots) / total) * double(slots)) : 0;
+                cBadSpeculationSlots = m->BadSpeculationSlots[core_id] += (total != 0) ? uint64((double(cBadSpeculationSlots) / total) * double(slots)) : 0;
+                cBackendBoundSlots = m->BackendBoundSlots[core_id] += (total != 0) ? uint64((double(cBackendBoundSlots) / total) * double(slots)) : 0;
+                cRetiringSlots = m->RetiringSlots[core_id] += (total != 0) ? uint64((double(cRetiringSlots) / total) * double(slots)) : 0;
                 if (m->isHWTMAL2Supported())
                 {
-                    cMemBoundSlots = m->MemBoundSlots[core_id] += uint64((double(cMemBoundSlots) / total) * double(slots));
-                    cFetchLatSlots = m->FetchLatSlots[core_id] += uint64((double(cFetchLatSlots) / total) * double(slots));
-                    cBrMispredSlots = m->BrMispredSlots[core_id] += uint64((double(cBrMispredSlots) / total) * double(slots));
-                    cHeavyOpsSlots = m->HeavyOpsSlots[core_id] += uint64((double(cHeavyOpsSlots) / total) * double(slots));
+                    cMemBoundSlots = m->MemBoundSlots[core_id] += (total != 0) ? uint64((double(cMemBoundSlots) / total) * double(slots)) : 0;
+                    cFetchLatSlots = m->FetchLatSlots[core_id] += (total != 0) ? uint64((double(cFetchLatSlots) / total) * double(slots)) : 0;
+                    cBrMispredSlots = m->BrMispredSlots[core_id] += (total != 0) ? uint64((double(cBrMispredSlots) / total) * double(slots)) : 0;
+                    cHeavyOpsSlots = m->HeavyOpsSlots[core_id] += (total != 0) ? uint64((double(cHeavyOpsSlots) / total) * double(slots)) : 0;
                 }
             }
             cAllSlotsRaw = m->AllSlotsRaw[core_id] += slots;
-            DBG(3, slots , " " , cFrontendBoundSlots , " " , cBadSpeculationSlots , " " , cBackendBoundSlots , " " , cRetiringSlots);
+            DBG(3, "HWTMAL1: ", slots , " " , cFrontendBoundSlots , " " , cBadSpeculationSlots , " " , cBackendBoundSlots , " " , cRetiringSlots);
             msr->unlock();
         }
     }
@@ -7483,6 +7512,7 @@ void initSocket2Bus(std::vector<std::pair<uint32, uint32> > & socket2bus, uint32
     Mutex::Scope _(socket2busMutex);
     if(!socket2bus.empty()) return;
 
+    try {
     forAllIntelDevices(
         [&devIdsSize,&DEV_IDS, &socket2bus](const uint32 group, const uint32 bus, const uint32 /* device */, const uint32 /* function */, const uint32 device_id)
         {
@@ -7497,6 +7527,11 @@ void initSocket2Bus(std::vector<std::pair<uint32, uint32> > & socket2bus, uint32
                 }
             }
         }, device, function);
+    } catch (const std::exception & e)
+    {
+           std::cerr << "Error in initSocket2Bus: " << e.what() << "\n";
+           socket2bus.clear();
+    }
 }
 
 int getBusFromSocket(const uint32 socket)

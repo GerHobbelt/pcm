@@ -33,8 +33,6 @@ typedef SOCKET socket_t;
 #define EAGAIN WSAEWOULDBLOCK
 #define EWOULDBLOCK WSAEWOULDBLOCK
 inline int close(SOCKET s) { return closesocket(s); }
-// Undefine Windows macros that conflict with our code
-#undef DELETE  // Conflicts with HTTPRequestMethod::DELETE enum
 #else
 #include <unistd.h>
 #include <signal.h>
@@ -299,7 +297,7 @@ private:
 socket_t SignalHandler::networkSocket_ = INVALID_SOCKET;
 HTTPServer* SignalHandler::httpServer_ = nullptr;
 
-namespace {  // Anonymous namespace to avoid symbol conflicts on Windows
+namespace pcm {
 
 class JSONPrinter : Visitor
 {
@@ -1390,7 +1388,7 @@ typedef basic_socketstream<wchar_t> wsocketstream;
 class Server {
 public:
     Server() = delete;
-    Server( const std::string & listenIP, uint16_t port ) noexcept( false ) : listenIP_(listenIP), wq_( WorkQueue::getInstance() ), port_( port ) {
+    Server( const std::string & listenIP, uint16_t port, bool useIPv4 = false ) noexcept( false ) : listenIP_(listenIP), wq_( WorkQueue::getInstance() ), port_( port ), useIPv4_( useIPv4 ) {
         DBG( 3, "Initializing Server" );
 #ifdef _WIN32
         // Initialize Winsock on Windows
@@ -1398,6 +1396,12 @@ public:
         int result = WSAStartup(MAKEWORD(2, 2), &wsaData);
         if (result != 0) {
             throw std::runtime_error(std::string("WSAStartup failed: ") + std::to_string(result));
+        }
+        // Verify that Winsock 2.2 or higher is available
+        if (LOBYTE(wsaData.wVersion) < 2 || (LOBYTE(wsaData.wVersion) == 2 && HIBYTE(wsaData.wVersion) < 2)) {
+            WSACleanup();
+            throw std::runtime_error(std::string("Winsock 2.2 or higher required. Found version: ") + 
+                                   std::to_string(LOBYTE(wsaData.wVersion)) + "." + std::to_string(HIBYTE(wsaData.wVersion)));
         }
 #endif
         serverSocket_ = initializeServerSocket();
@@ -1432,43 +1436,98 @@ private:
         if ( port_ == 0 )
             throw std::runtime_error( "Server Constructor: No port specified." );
 
-        socket_t sockfd = ::socket( AF_INET6, SOCK_STREAM, 0 );
+        bool useIPv4 = false;
+#ifdef _WIN32
+        // On Windows, use IPv4 by default for better compatibility
+        socket_t sockfd = ::socket( AF_INET, SOCK_STREAM, IPPROTO_TCP );
         if ( INVALID_SOCKET == sockfd )
         {
-#ifdef _WIN32
-            throw std::runtime_error( std::string("Server Constructor: Can´t create socket: ") + std::to_string(WSAGetLastError()) );
-#else
-            throw std::runtime_error( "Server Constructor: Can´t create socket" );
-#endif
+            throw std::runtime_error( std::string("Server Constructor: Can't create socket. WSAGetLastError: ") + std::to_string(WSAGetLastError()) );
         }
+        useIPv4 = true;
+#else
+        // On non-Windows systems, use IPv6 by default unless IPv4 is explicitly requested
+        useIPv4 = useIPv4_;
+        socket_t sockfd;
+        if ( useIPv4 ) {
+            sockfd = ::socket( AF_INET, SOCK_STREAM, 0 );
+            if ( INVALID_SOCKET == sockfd )
+            {
+                throw std::runtime_error( "Server Constructor: Can't create IPv4 socket" );
+            }
+        } else {
+            sockfd = ::socket( AF_INET6, SOCK_STREAM, 0 );
+            if ( INVALID_SOCKET == sockfd )
+            {
+                throw std::runtime_error( "Server Constructor: Can't create IPv6 socket" );
+            }
+        }
+#endif
 
         int retval = 0;
 
-        struct sockaddr_in6 serv;
-        serv.sin6_family = AF_INET6;
-        serv.sin6_port = htons( port_ );
-        if ( listenIP_.empty() )
-            serv.sin6_addr = in6addr_any;
-        else {
-            if ( 1 != ::inet_pton( AF_INET6, listenIP_.c_str(), &(serv.sin6_addr) ) )
-            {
-                DBG( 3, "close clientsocketFD" );
-                ::close(sockfd);
-                throw std::runtime_error( "Server Constructor: Cannot convert IP string" );
+        if (useIPv4) {
+            // Use IPv4
+            struct sockaddr_in serv4;
+            memset(&serv4, 0, sizeof(serv4));
+            serv4.sin_family = AF_INET;
+            serv4.sin_port = htons( port_ );
+            if ( listenIP_.empty() )
+                serv4.sin_addr.s_addr = INADDR_ANY;
+            else {
+                if ( 1 != ::inet_pton( AF_INET, listenIP_.c_str(), &(serv4.sin_addr) ) )
+                {
+                    DBG( 3, "close clientsocketFD" );
+#ifdef _WIN32
+                    closesocket(sockfd);
+#else
+                    ::close(sockfd);
+#endif
+                    throw std::runtime_error(std::string("Server Constructor: Cannot convert IP string ") + listenIP_ + " to IPv4 address");
+                }
             }
+            socklen_t len = sizeof( struct sockaddr_in );
+            retval = ::bind( sockfd, reinterpret_cast<struct sockaddr*>(&serv4), len );
+        } else {
+            // Use IPv6
+            struct sockaddr_in6 serv;
+            serv.sin6_family = AF_INET6;
+            serv.sin6_port = htons( port_ );
+            if ( listenIP_.empty() )
+                serv.sin6_addr = in6addr_any;
+            else {
+                if ( 1 != ::inet_pton( AF_INET6, listenIP_.c_str(), &(serv.sin6_addr) ) )
+                {
+                    DBG( 3, "close clientsocketFD" );
+#ifdef _WIN32
+                    closesocket(sockfd);
+#else
+                    ::close(sockfd);
+#endif
+                    throw std::runtime_error( std::string("Server Constructor: Cannot convert IP string ") + listenIP_ + " to IPv6 address" );
+                }
+            }
+            socklen_t len = sizeof( struct sockaddr_in6 );
+            retval = ::bind( sockfd, reinterpret_cast<struct sockaddr*>(&serv), len );
         }
-        socklen_t len = sizeof( struct sockaddr_in6 );
-        retval = ::bind( sockfd, reinterpret_cast<struct sockaddr*>(&serv), len );
         if ( 0 != retval ) {
             DBG( 3, "close clientsocketFD" );
+#ifdef _WIN32
+            closesocket( sockfd );
+#else
             ::close( sockfd );
+#endif
             throw std::runtime_error( std::string("Server Constructor: Cannot bind to port ") + std::to_string(port_) );
         }
 
         retval = listen( sockfd, 64 );
         if ( 0 != retval ) {
             DBG( 3, "close clientsocketFD" );
+#ifdef _WIN32
+            closesocket( sockfd );
+#else
             ::close( sockfd );
+#endif
             throw std::runtime_error( "Server Constructor: Cannot listen on socket" );
         }
         // Here everything should be fine, return socket fd
@@ -1480,6 +1539,7 @@ protected:
     WorkQueue*   wq_;
     socket_t     serverSocket_;
     uint16_t     port_;
+    bool         useIPv4_;
 };
 
 enum HTTPRequestMethod {
@@ -1487,7 +1547,7 @@ enum HTTPRequestMethod {
     HEAD,
     POST,
     PUT,
-    DELETE,
+    HTTP_DELETE,  // Renamed from DELETE to avoid conflict with Windows macro
     CONNECT,
     OPTIONS,
     TRACE,
@@ -1624,15 +1684,15 @@ private:
     }
 
     std::vector<struct HTTPMethodProperty> const httpMethodProperties = {
-        { GET,     "GET",     HTTPRequestHasBody::No,       true  },
-        { HEAD,    "HEAD",    HTTPRequestHasBody::No,       false },
-        { POST,    "POST",    HTTPRequestHasBody::Required, true  },
-        { PUT,     "PUT",     HTTPRequestHasBody::Required, true  },
-        { DELETE,  "DELETE",  HTTPRequestHasBody::No,       true  },
-        { CONNECT, "CONNECT", HTTPRequestHasBody::Required, true  },
-        { OPTIONS, "OPTIONS", HTTPRequestHasBody::Optional, true  },
-        { TRACE,   "TRACE",   HTTPRequestHasBody::No,       true  },
-        { PATCH,   "PATCH",   HTTPRequestHasBody::Required, true  }
+        { GET,         "GET",     HTTPRequestHasBody::No,       true  },
+        { HEAD,        "HEAD",    HTTPRequestHasBody::No,       false },
+        { POST,        "POST",    HTTPRequestHasBody::Required, true  },
+        { PUT,         "PUT",     HTTPRequestHasBody::Required, true  },
+        { HTTP_DELETE, "DELETE",  HTTPRequestHasBody::No,       true  },
+        { CONNECT,     "CONNECT", HTTPRequestHasBody::Required, true  },
+        { OPTIONS,     "OPTIONS", HTTPRequestHasBody::Optional, true  },
+        { TRACE,       "TRACE",   HTTPRequestHasBody::No,       true  },
+        { PATCH,       "PATCH",   HTTPRequestHasBody::Required, true  }
     };
 };
 
@@ -1919,7 +1979,7 @@ public:
                     throw std::runtime_error( "Something between : and //" );
 
                 pathBeginPos = fullURL.find( '/', authorityPos+2 );
-                authorityEndPos = std::min( { pathBeginPos, questionMarkPos, numberPos } );
+                authorityEndPos = (std::min)( { pathBeginPos, questionMarkPos, numberPos } );
                 authority = fullURL.substr( authorityPos+2, authorityEndPos - (authorityPos + 2) );
                 DBG( 3, "authority: '", authority, "'" );
 
@@ -2025,7 +2085,7 @@ public:
             }
         }
 
-        pathEndPos = std::min( {questionMarkPos, numberPos} );
+        pathEndPos = (std::min)( {questionMarkPos, numberPos} );
         if ( std::string::npos != pathBeginPos ) {
             url.path_ = fullURL.substr( pathBeginPos, pathEndPos - pathBeginPos );
         } else {
@@ -3154,7 +3214,7 @@ public:
         SignalHandler::getInstance()->setHTTPServer( this );
     }
 
-    HTTPServer( std::string const & ip, uint16_t port ) : Server( ip, port ), stopped_( false ) {
+    HTTPServer( std::string const & ip, uint16_t port, bool useIPv4 = false ) : Server( ip, port, useIPv4 ), stopped_( false ) {
         DBG( 3, "HTTPServer::HTTPServer( ip=", ip, ", port=", port, " )" );
         callbackList_.resize( 256 );
         createPeriodicCounterFetcher();
@@ -3216,7 +3276,7 @@ public:
             throw std::runtime_error("BUG: getAggregator: both indices are equal. Fix the code!" );
 
         // simply wait until we have enough samples to return
-        while( agVector_.size() < ( std::max( index, index2 ) + 1 ) )
+        while( agVector_.size() < ( (std::max)( index, index2 ) + 1 ) )
             std::this_thread::sleep_for(std::chrono::seconds(1));
 
         agVectorMutex_.lock();
@@ -3279,11 +3339,11 @@ BOOL WINAPI SignalHandler::handleSignal( DWORD signum )
     std::cerr << "handleSignal: signal " << signum << " caught.\n";
     std::cerr << "handleSignal: closing socket " << networkSocket_ << "\n";
     ::close( networkSocket_ );
+    std::cerr << "Cleaning up PMU:\n";
+    PCM::getInstance()->cleanup();
     std::cerr << "Stopping HTTPServer\n";
     if (httpServer_)
         httpServer_->stop();
-    std::cerr << "Cleaning up PMU:\n";
-    PCM::getInstance()->cleanup();
     std::cerr << "handleSignal: exiting with exit code 1...\n";
     exit(1);
     return TRUE;
@@ -3409,7 +3469,7 @@ void HTTPServer::run() {
 class HTTPSServer : public HTTPServer {
 public:
     HTTPSServer() : HTTPServer( "", 443 ) {}
-    HTTPSServer( std::string const & ip, uint16_t port ) : HTTPServer( ip, port ), sslCTX_( nullptr ) {}
+    HTTPSServer( std::string const & ip, uint16_t port, bool useIPv4 = false ) : HTTPServer( ip, port, useIPv4 ), sslCTX_( nullptr ) {}
     HTTPSServer( HTTPSServer const & ) = delete;
     HTTPSServer & operator = ( HTTPSServer const & ) = delete;
     virtual ~HTTPSServer() {
@@ -3843,8 +3903,8 @@ void my_get_callback( HTTPServer* hs, HTTPRequest const & req, HTTPResponse & re
     }
 }
 
-int startHTTPServer( unsigned short port ) {
-    HTTPServer server( "", port );
+int startHTTPServer( const std::string& listenAddr, unsigned short port, bool useIPv4 = false ) {
+    HTTPServer server( listenAddr, port, useIPv4 );
     try {
         // HEAD is GET without body, we will remove the body in execute()
         server.registerCallback( HTTPRequestMethod::GET,  my_get_callback );
@@ -3858,8 +3918,8 @@ int startHTTPServer( unsigned short port ) {
 }
 
 #if defined (USE_SSL)
-int startHTTPSServer( unsigned short port, std::string const & cFile, std::string const & pkFile) {
-    HTTPSServer server( "", port );
+int startHTTPSServer( const std::string& listenAddr, unsigned short port, std::string const & cFile, std::string const & pkFile, bool useIPv4 = false ) {
+    HTTPSServer server( listenAddr, port, useIPv4 );
     try {
         server.setPrivateKeyFile ( pkFile );
         server.setCertificateFile( cFile );
@@ -3876,6 +3936,27 @@ int startHTTPSServer( unsigned short port, std::string const & cFile, std::strin
 }
 #endif
 
+// Validate IP address string (IPv4 or IPv6)
+bool isValidIPAddress( const std::string& ipAddress ) {
+    if ( ipAddress.empty() ) {
+        return true;  // Empty string is valid - means bind to all interfaces
+    }
+    
+    // Try IPv4 first
+    struct sockaddr_in sa4;
+    if ( 1 == ::inet_pton( AF_INET, ipAddress.c_str(), &(sa4.sin_addr) ) ) {
+        return true;
+    }
+    
+    // Try IPv6
+    struct sockaddr_in6 sa6;
+    if ( 1 == ::inet_pton( AF_INET6, ipAddress.c_str(), &(sa6.sin6_addr) ) ) {
+        return true;
+    }
+    
+    return false;
+}
+
 void printHelpText( std::string const & programName ) {
     std::cout << "Usage: " << programName << " [OPTION]\n\n";
     std::cout << "Valid Options:\n";
@@ -3886,6 +3967,10 @@ void printHelpText( std::string const & programName ) {
     std::cout << "    -s                   : Use https protocol (default port " << DEFAULT_HTTPS_PORT << ")\n";
 #endif
     std::cout << "    -p portnumber        : Run on port <portnumber> (default port is " << DEFAULT_HTTP_PORT << ")\n";
+    std::cout << "    -l|--listen address  : Listen on IP address <address> (default: all interfaces)\n";
+#ifndef _WIN32
+    std::cout << "    -4|--ipv4            : Use IPv4 instead of IPv6 (non-Windows only)\n";
+#endif
     std::cout << "    -r|--reset           : Reset programming of the performance counters.\n";
     std::cout << "    -D|--debug level     : level = 0: no debug info, > 0 increase verbosity.\n";
 #if !defined(__APPLE__) && !defined(_WIN32)
@@ -3903,7 +3988,8 @@ void printHelpText( std::string const & programName ) {
     print_help_force_rtm_abort_mode(25, ":");
 }
 
-#if not defined( UNIT_TEST )
+#ifndef UNIT_TEST
+
 /* Main */
 PCM_MAIN_NOTHROW;
 
@@ -3923,8 +4009,10 @@ int mainThrows(int argc, char * argv[]) {
 #endif
     bool forceRTMAbortMode = false;
     bool printTopology = false;
+    bool useIPv4 = false;
     unsigned short port = 0;
     unsigned short debug_level = 0;
+    std::string listenAddress = "";  // Empty string means listen on all interfaces
     std::string certificateFile;
     std::string privateKeyFile;
     AcceleratorCounterState *accs_ = AcceleratorCounterState::getInstance();
@@ -3961,6 +4049,25 @@ int mainThrows(int argc, char * argv[]) {
                     throw std::runtime_error( "main: Error no port argument given" );
                 }
             }
+            else if ( check_argument_equals( argv[i], {"-l", "--listen"} ) )
+            {
+                if ( (++i) < argc ) {
+                    listenAddress = argv[i];
+                    if ( !isValidIPAddress( listenAddress ) ) {
+                        std::cerr << "Error: Invalid IP address '" << listenAddress << "'. ";
+                        std::cerr << "Please provide a valid IPv4 or IPv6 address.\n";
+                        exit( 1 );
+                    }
+                } else {
+                    throw std::runtime_error( "main: Error no listen address argument given" );
+                }
+            }
+#ifndef _WIN32
+            else if ( check_argument_equals( argv[i], {"-4", "--ipv4"} ) )
+            {
+                useIPv4 = true;
+            }
+#endif
 #if defined (USE_SSL)
             else if ( check_argument_equals( argv[i], {"-s"} ) )
             {
@@ -4245,15 +4352,17 @@ int mainThrows(int argc, char * argv[]) {
         if ( useSSL ) {
             if ( port == 0 )
                 port = DEFAULT_HTTPS_PORT;
-            std::cerr << "Starting SSL enabled server on https://localhost:" << port << "/\n";
-            startHTTPSServer( port, certificateFile, privateKeyFile );
+            std::string displayAddr = listenAddress.empty() ? "localhost" : listenAddress;
+            std::cerr << "Starting SSL enabled server on https://" << displayAddr << ":" << port << "/\n";
+            startHTTPSServer( listenAddress, port, certificateFile, privateKeyFile, useIPv4 );
         } else
 #endif
         {
             if ( port == 0 )
                 port = DEFAULT_HTTP_PORT;
-            std::cerr << "Starting plain HTTP server on http://localhost:" << port << "/\n";
-            startHTTPServer( port );
+            std::string displayAddr = listenAddress.empty() ? "localhost" : listenAddress;
+            std::cerr << "Starting plain HTTP server on http://" << displayAddr << ":" << port << "/\n";
+            startHTTPServer( listenAddress, port, useIPv4 );
         }
         delete pcmInstance;
     } else if ( pid > 0 ) {
