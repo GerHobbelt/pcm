@@ -186,7 +186,7 @@ void print_output(PCM * m,
             cout << " IPC   : instructions per CPU cycle\n";
             if (m->isActiveRelativeFrequencyAvailable())
             {
-                cout << " CFREQ : core frequency in Ghz\n";
+                cout << " CFREQ : core frequency in GHz\n";
             }
             break;
         default:

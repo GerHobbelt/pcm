@@ -258,8 +258,13 @@ PciHandle::PciHandle(uint32 groupnr_, uint32 bus_, uint32 device_, uint32 functi
     device(device_),
     function(function_)
 {
-    int handle = ::open("/dev/pci", O_RDWR);
-    if (handle < 0) throw std::exception();
+    int handle = ::open("/dev/pci", O_RDWR | O_NOFOLLOW);
+    if (handle < 0) {
+        if (errno == ELOOP) {
+            std::cerr << "SDL330 ERROR: Symlink detected at /dev/pci\n";
+        }
+        throw std::exception();
+    }
     fd = handle;
 }
 
@@ -271,8 +276,13 @@ bool PciHandle::exists(uint32 groupnr_, uint32 bus_, uint32 device_, uint32 func
     int fd;
     int ret;
 
-    fd = ::open("/dev/pci", O_RDWR, 0);
-    if (fd < 0) return false;
+    fd = ::open("/dev/pci", O_RDWR | O_NOFOLLOW, 0);
+    if (fd < 0) {
+        if (errno == ELOOP) {
+            std::cerr << "SDL330 ERROR: Symlink detected at /dev/pci\n";
+        }
+        return false;
+    }
 
     bzero(&pc, sizeof(pc));
 
@@ -391,11 +401,15 @@ int openHandle(uint32 groupnr_, uint32 bus, uint32 device, uint32 function)
 
 //    std::cout << "PciHandle: Opening "<<path.str()<<"\n";
 
-    int handle = ::open(path.str().c_str(), O_RDWR);
+    int handle = ::open(path.str().c_str(), O_RDWR | O_NOFOLLOW);
     if (handle < 0)
     {
        if (errno == 24) std::cerr << "ERROR: " << PCM_ULIMIT_RECOMMENDATION;
-       handle = ::open((std::string("/pcm") + path.str()).c_str(), O_RDWR);
+       if (errno == ELOOP) std::cerr << "SDL330 ERROR: Symlink detected at " << path.str() << "\n";
+       handle = ::open((std::string("/pcm") + path.str()).c_str(), O_RDWR | O_NOFOLLOW);
+       if (handle < 0 && errno == ELOOP) {
+           std::cerr << "SDL330 ERROR: Symlink detected at /pcm" << path.str() << "\n";
+       }
     }
     return handle;
 }
@@ -548,8 +562,13 @@ PciHandleMM::PciHandleMM(uint32 groupnr_, uint32 bus_, uint32 device_, uint32 fu
     function(function_),
     base_addr(0)
 {
-    int handle = ::open("/dev/mem", O_RDWR);
-    if (handle < 0) throw std::exception();
+    int handle = ::open("/dev/mem", O_RDWR | O_NOFOLLOW);
+    if (handle < 0) {
+        if (errno == ELOOP) {
+            std::cerr << "SDL330 CRITICAL: Symlink detected at /dev/mem - potential privilege escalation attack!\n";
+        }
+        throw std::exception();
+    }
     fd = handle;
 
     readMCFG();
@@ -589,9 +608,12 @@ PciHandleMM::PciHandleMM(uint32 groupnr_, uint32 bus_, uint32 device_, uint32 fu
 
 bool PciHandleMM::exists(uint32 /*groupnr_*/, uint32 /*bus_*/, uint32 /*device_*/, uint32 /*function_*/)
 {
-    int handle = ::open("/dev/mem", O_RDWR);
+    int handle = ::open("/dev/mem", O_RDWR | O_NOFOLLOW);
 
     if (handle < 0) {
+        if (errno == ELOOP) {
+            std::cerr << "SDL330 CRITICAL: Symlink detected at /dev/mem - potential privilege escalation attack!\n";
+        }
         perror("error opening /dev/mem");
         return false;
     }

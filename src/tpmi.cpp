@@ -57,7 +57,7 @@ public:
             assert(vsec.fields.EntrySize == 2);
             std::vector<PFS> pfsArray(vsec.fields.NumEntries);
             try {
-                mmio_memcpy(&(pfsArray[0]), bar + vsec.fields.Address, vsec.fields.NumEntries * sizeof(PFS), true, true);
+                mmio_memcpy(&(pfsArray[0]), bar + 8ULL * vsec.fields.Address, vsec.fields.NumEntries * sizeof(PFS), true, true);
             } catch (std::runtime_error & e)
             {
                 std::cerr << "Can't read PFS\n";
@@ -79,7 +79,7 @@ public:
                 for (uint64 p = 0; p < pfs.NumEntries; ++p)
                 {
                     uint32 reg0 = 0;
-                    const auto addr = bar + vsec.fields.Address + pfs.CapOffset * 1024ULL + p * pfs.EntrySize * sizeof(uint32);
+                    const auto addr = bar + 8ULL * vsec.fields.Address + pfs.CapOffset * 1024ULL + p * pfs.EntrySize * sizeof(uint32);
                     try {
                         mmio_memcpy(&reg0, addr, sizeof(uint32), false, true);
                     } catch (std::runtime_error & e)

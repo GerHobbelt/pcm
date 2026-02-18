@@ -99,8 +99,14 @@ if(UNIX)  # LINUX, FREE_BSD, APPLE
 endif()
 
 if(MSVC)
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /O2 /wd4251 /wd4273 /EHa /Zi")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /O2 /wd4251 /wd4273 /EHa /Zi /GS /Gy")
     add_definitions(/W3)
+    # SDL429 security flags: ASLR (/DYNAMICBASE) and DEP (/NXCOMPAT)
+    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} /DYNAMICBASE /NXCOMPAT")
+    # Optional Spectre mitigation for newer MSVC versions
+    if(MSVC_TOOLSET_VERSION GREATER_EQUAL 141)
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /Qspectre")
+    endif()
 
     # windows/* files -> PCM_STATIC
     file(GLOB WINDOWS_SOURCES winpmem/winpmem.cpp windows/stdafx.cpp freegetopt/getopt.cpp)

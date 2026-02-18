@@ -166,8 +166,13 @@ MsrHandle::MsrHandle(uint32 cpu) : fd(-1), cpu_id(cpu)
 {
     char path[200];
     snprintf(path, 200, "/dev/cpuctl%u", cpu);
-    int handle = ::open(path, O_RDWR);
-    if (handle < 0) throw std::exception();
+    int handle = ::open(path, O_RDWR | O_NOFOLLOW);
+    if (handle < 0) {
+        if (errno == ELOOP) {
+            std::cerr << "SDL330 ERROR: Symlink detected at " << path << "\n";
+        }
+        throw std::exception();
+    }
     fd = handle;
 }
 
@@ -229,11 +234,17 @@ MsrHandle::MsrHandle(uint32 cpu) : fd(-1), cpu_id(cpu)
     char * path = new char[200];
     if (!path) throw std::runtime_error("Allocation of 200 bytes failed.");
     snprintf(path, 200, "/dev/cpu/%u/msr", cpu);
-    int handle = ::open(path, O_RDWR);
+    int handle = ::open(path, O_RDWR | O_NOFOLLOW);
+    if (handle < 0 && errno == ELOOP) {
+        std::cerr << "SDL330 ERROR: Symlink detected at MSR device path " << path << "\n";
+    }
     if (handle < 0)
     {   // try Android msr device path
         snprintf(path, 200, "/dev/msr%u", cpu);
-        handle = ::open(path, O_RDWR);
+        handle = ::open(path, O_RDWR | O_NOFOLLOW);
+        if (handle < 0 && errno == ELOOP) {
+            std::cerr << "SDL330 ERROR: Symlink detected at MSR device path " << path << "\n";
+        }
     }
     deleteAndNullifyArray(path);
     if (handle < 0)

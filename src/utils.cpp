@@ -17,6 +17,7 @@
 #else
 #include <sys/wait.h> // for waitpid()
 #include <unistd.h> // for ::sleep
+#include <fcntl.h>  // for open(), O_NOFOLLOW
 #endif
 #include "utils.h"
 #include "cpucounters.h"
@@ -1500,10 +1501,28 @@ std::pair<int64,int64> parseBitsParameter(const char * param)
 #ifdef __linux__
 FILE * tryOpen(const char * path, const char * mode)
 {
-    FILE * f = fopen(path, mode);
-    if (!f)
+    // SDL330: O_NOFOLLOW rejects symlinks atomically (no TOCTOU)
+    int flags = O_NOFOLLOW;
+    if (strchr(mode, 'w')) {
+        flags |= O_WRONLY | O_CREAT | O_TRUNC;
+    } else {
+        flags |= O_RDONLY;
+    }
+
+    int fd = open(path, flags, 0644);
+    if (fd < 0)
     {
-        f = fopen((std::string("/pcm") + path).c_str(), mode);
+        const std::string alt_path = std::string("/pcm") + path;
+        fd = open(alt_path.c_str(), flags, 0644);
+    }
+
+    if (fd < 0) {
+        return nullptr;
+    }
+
+    FILE * f = fdopen(fd, mode);
+    if (!f) {
+        close(fd);
     }
     return f;
 }
