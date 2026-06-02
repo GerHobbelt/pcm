@@ -18,6 +18,7 @@ file(GLOB LSPCI_TEST_FILES lspci-utest.cpp ${CMAKE_SOURCE_DIR}/src/lspci.cpp)
 file(GLOB PCM_IIO_TEST_FILES pcm-iio-utest.cpp ${CMAKE_SOURCE_DIR}/src/pcm-iio-pmu.cpp ${CMAKE_SOURCE_DIR}/src/pcm-iio-topology.cpp)
 file(GLOB READ_NUMBER_TEST_FILES read-number-utest.cpp)
 file(GLOB PCM_SENSOR_SERVER_OVERFLOW_TEST_FILES pcm-sensor-server-overflow-utest.cpp)
+file(GLOB PCM_SENSOR_SERVER_CONTENT_LENGTH_TEST_FILES pcm-sensor-server-content-length-utest.cpp)
 
 if(APPLE)
     set(LIBS PcmMsr Threads::Threads PCM_STATIC)
@@ -29,6 +30,7 @@ add_executable(lspci-utest ${LSPCI_TEST_FILES})
 add_executable(pcm-iio-utest ${PCM_IIO_TEST_FILES})
 add_executable(read-number-utest ${READ_NUMBER_TEST_FILES})
 add_executable(pcm-sensor-server-overflow-utest ${PCM_SENSOR_SERVER_OVERFLOW_TEST_FILES})
+add_executable(pcm-sensor-server-content-length-utest ${PCM_SENSOR_SERVER_CONTENT_LENGTH_TEST_FILES})
 
 configure_file(
     ${CMAKE_SOURCE_DIR}/src/opCode-6-174.txt
@@ -64,8 +66,16 @@ target_link_libraries(
     ${LIBS}
 )
 
+target_link_libraries(
+    pcm-sensor-server-content-length-utest
+    GTest::gtest_main
+    GTest::gmock_main
+    ${LIBS}
+)
+
 include(GoogleTest)
 gtest_discover_tests(lspci-utest)
 gtest_discover_tests(pcm-iio-utest)
 gtest_discover_tests(read-number-utest)
 gtest_discover_tests(pcm-sensor-server-overflow-utest)
+gtest_discover_tests(pcm-sensor-server-content-length-utest)
