@@ -2337,6 +2337,13 @@ std::unordered_map<enum MimeType, std::string, std::hash<int>> mimeTypeMap = {
     { ApplicationJSON,     "application/json" }
 };
 
+// Upper bound on the request body size the server is willing to accept and
+// buffer in memory. Content-Length values above this are rejected before any
+// allocation happens. This caps the attacker-controlled allocation length
+// (CWE-190/CWE-400) so an unauthenticated client cannot drive unbounded
+// memory growth via large or negative Content-Length headers.
+static constexpr long long kMaxRequestBodyBytes = 16 * 1024 * 1024; // 16 MiB
+
 class HTTPHeader {
 public:
     HTTPHeader() {
@@ -2444,8 +2451,16 @@ public:
     }
 
     size_t headerValueAsNumber() const {
-        size_t number = std::stoll( value_ );
-        return number;
+        // Parse as signed so we can detect negative values (which would
+        // otherwise wrap to a huge size_t) and reject anything outside the
+        // accepted request-body bounds before it is used as an allocation
+        // length. See kMaxRequestBodyBytes (CWE-190/CWE-400).
+        long long parsed = std::stoll( value_ );
+        if ( parsed < 0 )
+            throw std::runtime_error( "Negative header value not allowed" );
+        if ( parsed > kMaxRequestBodyBytes )
+            throw std::runtime_error( "Header value exceeds maximum allowed size" );
+        return static_cast<size_t>( parsed );
     }
 
     double headerValueAsDouble() const {
@@ -2611,6 +2626,11 @@ public:
 
 protected:
     std::string readData( socketstream& in, size_t length ) {
+        // Defense-in-depth: never allocate a body buffer larger than the
+        // configured maximum, even if a caller bypasses headerValueAsNumber()
+        // validation (CWE-190/CWE-400).
+        if ( length > static_cast<size_t>( kMaxRequestBodyBytes ) )
+            throw std::runtime_error( "Request body exceeds maximum allowed size" );
         std::string data( length, '\0' );
         in.read( &data[0], length );
         return data;
