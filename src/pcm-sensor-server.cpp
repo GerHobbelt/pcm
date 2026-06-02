@@ -2632,7 +2632,11 @@ protected:
         if ( length > static_cast<size_t>( kMaxRequestBodyBytes ) )
             throw std::runtime_error( "Request body exceeds maximum allowed size" );
         std::string data( length, '\0' );
-        in.read( &data[0], length );
+        // Avoid indexing data[0] when length is zero: for an empty string this
+        // is undefined behavior and can be triggered by a Content-Length: 0
+        // request (or optional-body methods).
+        if ( length > 0 )
+            in.read( &data[0], length );
         return data;
     }
 
@@ -2645,11 +2649,22 @@ protected:
             // chunkheader: hexadecimal numbers followed by an optional semi-colon with a comment and a \r
             // stoll should filter all that crap out for us and return just the hexadecimal digits
             DBG( 3, "chunkHeader (ater check for 0): '", chunkHeader, "'" );
-            size_t length = std::stoll( chunkHeader, nullptr, 16 );
+            // Parse as signed so we can detect negative values (which would
+            // otherwise wrap to a huge size_t) and bound each chunk plus the
+            // accumulated body to kMaxRequestBodyBytes (CWE-190/CWE-400).
+            long long parsedLength = std::stoll( chunkHeader, nullptr, 16 );
+            if ( parsedLength < 0 )
+                throw std::runtime_error( "Negative chunk size not allowed" );
+            if ( parsedLength > kMaxRequestBodyBytes )
+                throw std::runtime_error( "Chunk size exceeds maximum allowed size" );
+            size_t length = static_cast<size_t>( parsedLength );
+            if ( data.size() + length > static_cast<size_t>( kMaxRequestBodyBytes ) )
+                throw std::runtime_error( "Request body exceeds maximum allowed size" );
             DBG( 3, "length: '", length, "'" );
             // Initialize chunk to all zeros
             std::string chunk( length, '\0' );
-            in.read( &chunk[0], length );
+            if ( length > 0 )
+                in.read( &chunk[0], length );
             DBG( 3, "chunk: '", chunk, "'" );
             data += chunk;
             // Reads trailing \r\n from the chunk
