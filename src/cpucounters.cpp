@@ -8585,7 +8585,7 @@ void ServerUncorePMUs::initDirect(uint32 socket_, const PCM * pcm)
             break;
         case PCM::GNR:
             {
-                numChannels = imcPMUs.size();
+                numChannels = static_cast<int>(imcPMUs.size());
                 for (int channel = 0; channel < numChannels; ++channel)
                 {
                     num_imc_channels.push_back(1);
