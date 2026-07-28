@@ -101,65 +101,6 @@ int32 MsrHandle::read(uint64 msr_number, uint64 * value)
     return status ? sizeof(uint64) : 0;
 }
 
-#elif __APPLE__
-// OSX Version
-
-MSRAccessor * MsrHandle::driver = NULL;
-int MsrHandle::num_handles = 0;
-
-MsrHandle::MsrHandle(uint32 cpu)
-{
-    cpu_id = cpu;
-    if (!driver)
-    {
-        driver = new MSRAccessor();
-        MsrHandle::num_handles = 1;
-    }
-    else
-    {
-        MsrHandle::num_handles++;
-    }
-}
-
-MsrHandle::~MsrHandle()
-{
-    MsrHandle::num_handles--;
-    if (MsrHandle::num_handles == 0)
-    {
-        deleteAndNullify(driver);
-    }
-}
-
-int32 MsrHandle::write(uint64 msr_number, uint64 value)
-{
-    return driver->write(cpu_id, msr_number, value);
-}
-
-int32 MsrHandle::read(uint64 msr_number, uint64 * value)
-{
-    return driver->read(cpu_id, msr_number, value);
-}
-
-int32 MsrHandle::buildTopology(uint32 num_cores, void * ptr)
-{
-    return driver->buildTopology(num_cores, ptr);
-}
-
-uint32 MsrHandle::getNumInstances()
-{
-    return driver->getNumInstances();
-}
-
-uint32 MsrHandle::incrementNumInstances()
-{
-    return driver->incrementNumInstances();
-}
-
-uint32 MsrHandle::decrementNumInstances()
-{
-    return driver->decrementNumInstances();
-}
-
 #elif defined(__FreeBSD__) || defined(__DragonFly__)
 
 MsrHandle::MsrHandle(uint32 cpu) : fd(-1), cpu_id(cpu)

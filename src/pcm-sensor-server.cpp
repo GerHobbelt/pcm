@@ -73,6 +73,7 @@ typedef int socket_t;
 #include <chrono>
 #include <algorithm>
 #include <mutex>
+#include <condition_variable>
 #include <thread>
 #include <atomic>
 
@@ -2625,6 +2626,10 @@ public:
     }
 
 protected:
+    // Upper bound on a single chunk's declared size to prevent attacker
+    // controlled chunk headers from forcing unbounded allocations.
+    static constexpr unsigned long long MAX_CHUNK_BYTES = 64ULL * 1024ULL * 1024ULL;
+
     std::string readData( socketstream& in, size_t length ) {
         // Defense-in-depth: never allocate a body buffer larger than the
         // configured maximum, even if a caller bypasses headerValueAsNumber()
@@ -2643,28 +2648,42 @@ protected:
     std::string readChunkedData( socketstream& in ) {
         std::string chunkHeader;
         std::string data;
-        std::getline( in, chunkHeader, '\n' );
-        // Final header starts with 0, rest of the line is not important
-        while ( '0' != chunkHeader[0] ) {
-            // chunkheader: hexadecimal numbers followed by an optional semi-colon with a comment and a \r
-            // stoll should filter all that crap out for us and return just the hexadecimal digits
-            DBG( 3, "chunkHeader (ater check for 0): '", chunkHeader, "'" );
-            // Parse as signed so we can detect negative values (which would
-            // otherwise wrap to a huge size_t) and bound each chunk plus the
-            // accumulated body to kMaxRequestBodyBytes (CWE-190/CWE-400).
-            long long parsedLength = std::stoll( chunkHeader, nullptr, 16 );
-            if ( parsedLength < 0 )
-                throw std::runtime_error( "Negative chunk size not allowed" );
-            if ( parsedLength > kMaxRequestBodyBytes )
-                throw std::runtime_error( "Chunk size exceeds maximum allowed size" );
+        while ( true ) {
+            std::getline( in, chunkHeader, '\n' );
+            DBG( 3, "chunkHeader (after check for 0): '", chunkHeader, "'" );
+            // chunkHeader: hexadecimal numbers followed by an optional semi-colon
+            // with a chunk extension and a trailing \r
+            const auto chunkSizeEnd = chunkHeader.find_first_not_of( "0123456789abcdefABCDEF" );
+            if ( chunkHeader.empty() || chunkSizeEnd == 0 || chunkSizeEnd == std::string::npos )
+                throw std::runtime_error( "Invalid chunk size line in chunked request body" );
+            const std::string chunkSuffix = chunkHeader.substr( chunkSizeEnd );
+            if ( ( chunkSuffix[0] == ';' && chunkSuffix.back() != '\r' ) ||
+                 ( chunkSuffix[0] != ';' && chunkSuffix != "\r" ) ) {
+                throw std::runtime_error( "Invalid chunk size line in chunked request body" );
+            }
+            // Validate the parsed chunk length before using it as an allocation
+            // size. An unbounded positive value could be used to force a large
+            // allocation (memory-growth denial of service) via
+            // Transfer-Encoding: chunked.
+            unsigned long long parsedLength = 0;
+            try {
+                parsedLength = std::stoull( chunkHeader.substr( 0, chunkSizeEnd ), nullptr, 16 );
+            } catch ( std::exception const & e ) {
+                throw std::runtime_error( std::string( "Invalid chunk size in chunked request body: " ) + e.what() );
+            }
+            if ( parsedLength > MAX_CHUNK_BYTES )
+                throw std::runtime_error( "Chunk size in chunked request body exceeds the maximum allowed size" );
             size_t length = static_cast<size_t>( parsedLength );
+            if ( length == 0 )
+                break;
+            // Bound the total accumulated body so that many chunks cannot be
+            // used to grow the buffer without limit (CWE-400).
             if ( data.size() + length > static_cast<size_t>( kMaxRequestBodyBytes ) )
                 throw std::runtime_error( "Request body exceeds maximum allowed size" );
             DBG( 3, "length: '", length, "'" );
             // Initialize chunk to all zeros
             std::string chunk( length, '\0' );
-            if ( length > 0 )
-                in.read( &chunk[0], length );
+            in.read( &chunk[0], length );
             DBG( 3, "chunk: '", chunk, "'" );
             data += chunk;
             // Reads trailing \r\n from the chunk
@@ -2902,6 +2921,11 @@ static constexpr std::chrono::seconds kRequestHeaderDeadline{ 30 };
 static constexpr size_t kMaxRequestLineBytes = 8192;
 static constexpr size_t kMaxHeaderLineBytes  = 8192;
 static constexpr size_t kMaxTotalHeaderBytes = 64 * 1024;
+// Upper bound on the number of distinct headers (request headers plus any
+// chunked trailer headers) accepted for a single request. The cumulative
+// byte cap above already bounds total memory, but an explicit count ceiling
+// keeps the headers_ container small and rejects header-flood requests early.
+static constexpr size_t kMaxHeaderCount = 100;
 
 // Scoped guard that temporarily tightens the underlying socket's SO_RCVTIMEO
 // so a single blocking read cannot exceed the remaining wall-clock budget,
@@ -3155,6 +3179,7 @@ basic_socketstream<CharT, Traits>& operator>>( basic_socketstream<CharT, Traits>
     std::string line;
     std::string concatLine;
     size_t totalHeaderBytes = 0;
+    size_t headerCount = 0;
     bool haveCurrentHeader = false;
     while ( true ) {
         readLineBounded( rs, line, kMaxHeaderLineBytes, requestDeadline );
@@ -3199,6 +3224,9 @@ basic_socketstream<CharT, Traits>& operator>>( basic_socketstream<CharT, Traits>
                 if ( hh.type() == HeaderType::Invalid ) {
                     throw std::runtime_error( std::string("Bad Request received: ") + hh.invalidReason() );
                 }
+                if ( ++headerCount > kMaxHeaderCount ) {
+                    throw std::runtime_error( "HTTP request exceeds maximum allowed header count" );
+                }
                 m.addHeader( hh );
                 concatLine.clear();
                 haveCurrentHeader = false;
@@ -3222,6 +3250,9 @@ basic_socketstream<CharT, Traits>& operator>>( basic_socketstream<CharT, Traits>
             hh.debugPrint();
             if ( hh.type() == HeaderType::Invalid ) {
                 throw std::runtime_error( std::string("Bad Request received: ") + hh.invalidReason() );
+            }
+            if ( ++headerCount > kMaxHeaderCount ) {
+                throw std::runtime_error( "HTTP request exceeds maximum allowed header count" );
             }
             m.addHeader( hh );
             concatLine.clear();
@@ -3334,6 +3365,9 @@ basic_socketstream<CharT, Traits>& operator>>( basic_socketstream<CharT, Traits>
                     if ( hh.type() == HeaderType::Invalid ) {
                         // Bad request, throw exception, catch in httpconnection, create response there
                         throw std::runtime_error( std::string("Bad Request received: ") + hh.invalidReason() );
+                    }
+                    if ( ++headerCount > kMaxHeaderCount ) {
+                        throw std::runtime_error( "HTTP request exceeds maximum allowed header count" );
                     }
                     m.addHeader( hh );
                     ++numHeadersAdded;
@@ -3534,7 +3568,25 @@ public:
             // Do processing of the request here
             auto callback = callbackList_[request.method()];
             if ( callback ) {
-                (*callback)( hs_, request, response );
+                try {
+                    (*callback)( hs_, request, response );
+                } catch ( const std::exception& e ) {
+                    // A request handler must never take down the worker thread
+                    // (and with it the whole process). Turn any unexpected
+                    // exception into a 500 response so the connection fails
+                    // gracefully instead of calling std::terminate.
+                    DBG( 3, "Exception while handling request: ", e.what() );
+                    response = HTTPResponse();
+                    response.setProtocol( request.protocol() );
+                    std::string body( "500 Internal Server Error." );
+                    response.createResponse( TextPlain, body, RC_500_InternalServerError );
+                } catch ( ... ) {
+                    DBG( 3, "Unknown exception while handling request" );
+                    response = HTTPResponse();
+                    response.setProtocol( request.protocol() );
+                    std::string body( "500 Internal Server Error." );
+                    response.createResponse( TextPlain, body, RC_500_InternalServerError );
+                }
             } else {
                 std::string body( "501 Not Implemented." );
                 body += " Method \"" + HTTPMethodProperties::getMethodAsString(request.method()) + "\" is not implemented (yet).";
@@ -3629,6 +3681,17 @@ private:
 
 class HTTPServer : public Server {
 public:
+    // The internal history of aggregators is permanently capped at
+    // maxAggregators_ entries (see addAggregator()), so the only valid indices
+    // are 0 .. maxAggregators_ - 1. Answering /persecond/X compares the newest
+    // sample (index 0) with the sample X seconds earlier (index X), which needs
+    // X + 1 retained entries. The largest X that can ever be satisfied is
+    // therefore maxAggregators_ - 1. Deriving the accepted bound from the cap
+    // keeps the route validation and the retention policy in sync and prevents
+    // the off-by-one that caused /persecond/30 to block a worker forever.
+    static constexpr size_t maxAggregators_ = 30;
+    static constexpr size_t maxPerSecondSeconds_ = maxAggregators_ - 1;
+
     HTTPServer() : Server( "", 80 ), stopped_( false ){
         DBG( 3, "HTTPServer::HTTPServer()" );
         callbackList_.resize( 256 );
@@ -3685,26 +3748,33 @@ public:
     void addAggregator( std::shared_ptr<Aggregator> agp ) {
         DBG( 4, "HTTPServer::addAggregator( agp=", std::hex, agp.get(), " ) called" );
 
-        agVectorMutex_.lock();
-        agVector_.insert( agVector_.begin(), agp );
-        if ( agVector_.size() > 30 ) {
-            DBG( 4, "HTTPServer::addAggregator(): Removing last Aggegator" );
-            agVector_.pop_back();
+        {
+            std::lock_guard<std::mutex> lock( agVectorMutex_ );
+            agVector_.insert( agVector_.begin(), agp );
+            if ( agVector_.size() > maxAggregators_ ) {
+                DBG( 4, "HTTPServer::addAggregator(): Removing last Aggegator" );
+                agVector_.pop_back();
+            }
         }
-        agVectorMutex_.unlock();
+        agVectorCV_.notify_all();
     }
 
     std::pair<std::shared_ptr<Aggregator>,std::shared_ptr<Aggregator>> getAggregators( size_t index, size_t index2 ) {
         if ( index == index2 )
             throw std::runtime_error("BUG: getAggregator: both indices are equal. Fix the code!" );
 
-        // simply wait until we have enough samples to return
-        while( agVector_.size() < ( (std::max)( index, index2 ) + 1 ) )
-            std::this_thread::sleep_for(std::chrono::seconds(1));
+        // The history is permanently capped at maxAggregators_ entries, so any
+        // request for an index that can never be retained would otherwise wait
+        // forever. Fail fast instead of blocking a worker thread indefinitely.
+        if ( (std::max)( index, index2 ) >= maxAggregators_ )
+            throw std::runtime_error("BUG: getAggregator: requested index can never be satisfied. Fix the code!" );
 
-        agVectorMutex_.lock();
+        // Wait under the mutex until we have enough samples to return, using the
+        // condition variable so we don't race against addAggregator().
+        auto needSize = (std::max)( index, index2 ) + 1;
+        std::unique_lock<std::mutex> lock( agVectorMutex_ );
+        agVectorCV_.wait( lock, [&]{ return agVector_.size() >= needSize; } );
         auto ret = std::make_pair( agVector_[ index ], agVector_[ index2 ] );
-        agVectorMutex_.unlock();
         return ret;
     }
 
@@ -3750,6 +3820,7 @@ protected:
     std::vector<http_callback>               callbackList_;
     std::vector<std::shared_ptr<Aggregator>> agVector_;
     std::mutex agVectorMutex_;
+    std::condition_variable agVectorCV_;
     PeriodicCounterFetcher* pcf_;
     bool stopped_;
 };
@@ -4213,7 +4284,7 @@ void my_get_callback( HTTPServer* hs, HTTPRequest const & req, HTTPResponse & re
     <ul>\n\
       <li>/ : This will fetch the counter values since start of the daemon, minus overflow so should be considered absolute numbers and should be used for further processing by yourself.</li>\n\
       <li>/persecond : This will fetch data from the internal sample thread which samples every second and returns the difference between the last 2 samples.</li>\n\
-      <li>/persecond/X : This will fetch data from the internal sample thread which samples every second and returns the difference between the last 2 samples which are X seconds apart. X can be at most 30 seconds without changing the source code.</li>\n\
+      <li>/persecond/X : This will fetch data from the internal sample thread which samples every second and returns the difference between the last 2 samples which are X seconds apart. X can be at most 29 seconds without changing the source code.</li>\n\
       <li>/metrics : The Prometheus server does not send an Accept header to decide what format to return so it got its own endpoint that will always return data in the Prometheus format. pcm-sensor-server is sending the header \"Content-Type: text/plain; version=0.0.4\" as required. This /metrics endpoints mimics the same behavior as / and data is thus absolute, not relative.</li>\n\
       <li>/dashboard/influxdb : This will return JSON for a Grafana dashboard with InfluxDB backend that holds all counters. Please see the documentation for more information.</li>\n\
       <li>/dashboard/prometheus : This will return JSON for a Grafana dashboard with Prometheus backend that holds all counters. Please see the documentation for more information.</li>\n\
@@ -4267,16 +4338,16 @@ void my_get_callback( HTTPServer* hs, HTTPRequest const & req, HTTPResponse & re
                 if ( std::all_of( url.path_.begin(), url.path_.end(), ::isdigit ) ) {
                     size_t seconds;
                     try {
-                        seconds = std::stoll( url.path_ );
-                    } catch ( std::exception& e ) {
+                        seconds = std::stoull( url.path_ );
+                    } catch ( const std::exception& e ) {
                         DBG( 3, "Error during conversion of /persecond/ seconds: ", e.what() );
                         seconds = 0;
                     }
-                    if ( 1 <= seconds && 30 >= seconds ) {
+                    if ( 1 <= seconds && HTTPServer::maxPerSecondSeconds_ >= seconds ) {
                         aggregatorPair = hs->getAggregators( seconds, 0 );
                     } else {
-                        DBG( 3, "seconds equals 0 or seconds larger than 30 is not allowed" );
-                        std::string body( "400 Bad Request. seconds equals 0 or seconds larger than 30 is not allowed" );
+                        DBG( 3, "seconds equals 0 or seconds larger than ", HTTPServer::maxPerSecondSeconds_, " is not allowed" );
+                        std::string body( "400 Bad Request. seconds equals 0 or seconds larger than " + std::to_string( HTTPServer::maxPerSecondSeconds_ ) + " is not allowed" );
                         resp.createResponse( TextPlain, body, RC_400_BadRequest );
                         return;
                     }
@@ -4396,7 +4467,7 @@ void printHelpText( std::string const & programName ) {
 #endif
     std::cout << "    -r|--reset           : Reset programming of the performance counters.\n";
     std::cout << "    -D|--debug level     : level = 0: no debug info, > 0 increase verbosity.\n";
-#if !defined(__APPLE__) && !defined(_WIN32)
+#if !defined(_WIN32)
     std::cout << "    -R|--real-time       : If possible the daemon will run with real time\n";
     std::cout << "                           priority, could be useful under heavy load to \n";
     std::cout << "                           stabilize the async counter fetching.\n";
@@ -4427,9 +4498,7 @@ int mainThrows(int argc, char * argv[]) {
     bool useSSL = false;
 #endif
     bool forcedProgramming = false;
-#ifndef __APPLE__
     bool useRealtimePriority = false;
-#endif
     bool forceRTMAbortMode = false;
     bool printTopology = false;
     bool useIPv4 = false;
@@ -4534,12 +4603,10 @@ int mainThrows(int argc, char * argv[]) {
                     throw std::runtime_error( "main: Error no debug level argument given" );
                 }
             }
-#ifndef __APPLE__
             else if ( check_argument_equals( argv[i], {"-R", "--real-time"} ) )
             {
                 useRealtimePriority = true;
             }
-#endif
             else if ( check_argument_equals( argv[i], {"--help", "-h", "/h"} ) )
             {
                 printHelpText( argv[0] );
@@ -4663,7 +4730,7 @@ int mainThrows(int argc, char * argv[]) {
     }
 #endif
 
-#if !defined(__APPLE__) && !defined(_WIN32)
+#if !defined(_WIN32)
     if ( useRealtimePriority ) {
         int priority = sched_get_priority_min( SCHED_RR );
         if ( priority == -1 ) {

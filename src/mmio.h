@@ -160,18 +160,14 @@ public:
     }
 };
 
-#elif defined(__APPLE__) || defined(__linux__) || defined(__FreeBSD__) || defined(__DragonFly__)
+#elif defined(__linux__) || defined(__FreeBSD__) || defined(__DragonFly__)
 
 class MMIORange
 {
-#ifndef __APPLE__
     int32 fd;
-#endif
     char * mmapAddr;
     const uint64 size;
-#ifndef __APPLE__
     const bool readonly;
-#endif
     const bool silent;
     const int core;
     MMIORange(const MMIORange &) = delete;

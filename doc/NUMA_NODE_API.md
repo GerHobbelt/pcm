@@ -78,11 +78,6 @@ if (numa_node >= 0) {
   - -1 if NUMA is disabled, not supported, or device affinity information unavailable
 - **Note**: FreeBSD doesn't have a standardized sysctl path for PCI device NUMA affinity across all versions
 
-### macOS
-
-- **Method**: Returns -1 (macOS typically doesn't expose NUMA for PCI devices)
-- **Return**: -1 (not applicable)
-
 ## Use Cases
 
 1. **Performance Optimization**: Place processing threads on the same NUMA node as the device

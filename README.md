@@ -8,7 +8,7 @@ Intel&reg; Performance Counter Monitor (Intel&reg; PCM)
 
 [PCM Tools](#pcm-tools) | [Building PCM](#building-pcm-tools) | [Downloading Pre-Compiled PCM](#downloading-pre-compiled-pcm-tools) | [FAQ](#frequently-asked-questions-faq) | [API Documentation](#pcm-api-documentation) | [Environment Variables](#pcm-environment-variables) | [Compilation Options](#custom-compilation-options)
 
-Intel&reg; Performance Counter Monitor (Intel&reg; PCM) is an application programming interface (API) and a set of tools based on the API to monitor performance and energy metrics of Intel&reg; Core&trade;, Xeon&reg;, Atom&trade; and Xeon Phi&trade; processors. PCM works on Linux, Windows, Mac OS X, FreeBSD, DragonFlyBSD and ChromeOS operating systems.
+Intel&reg; Performance Counter Monitor (Intel&reg; PCM) is an application programming interface (API) and a set of tools based on the API to monitor performance and energy metrics of Intel&reg; Core&trade;, Xeon&reg;, Atom&trade; and Xeon Phi&trade; processors. PCM works on Linux, Windows, FreeBSD, DragonFlyBSD and ChromeOS operating systems.
 
 *Github repository statistics:* ![Custom badge](https://img.shields.io/endpoint?url=https%3A%2F%2Fhetthbszh0.execute-api.us-east-2.amazonaws.com%2Fdefault%2Fpcm-clones) ![Custom badge](https://img.shields.io/endpoint?url=https%3A%2F%2F5urjfrshcd.execute-api.us-east-2.amazonaws.com%2Fdefault%2Fpcm-yesterday-clones) ![Custom badge](https://img.shields.io/endpoint?url=https%3A%2F%2Fcsqqh18g3l.execute-api.us-east-2.amazonaws.com%2Fdefault%2Fpcm-today-clones)
 
@@ -21,7 +21,6 @@ Current Build Status
 - Linux: [![GitHub Workflow Status](https://img.shields.io/github/actions/workflow/status/intel/pcm/linux_make.yml?branch=master)](https://github.com/intel/pcm/actions/workflows/linux_make.yml?query=branch%3Amaster)
 - Windows: [![Build status](https://ci.appveyor.com/api/projects/status/github/intel/pcm?branch=master&svg=true)](https://ci.appveyor.com/project/opcm/pcm)
 - FreeBSD: [![GitHub Workflow Status](https://img.shields.io/github/actions/workflow/status/intel/pcm/freebsd_build.yml?branch=master)](https://github.com/intel/pcm/actions/workflows/freebsd_build.yml?query=branch%3Amaster)
-- OS X: [![GitHub Workflow Status](https://img.shields.io/github/actions/workflow/status/intel/pcm/macosx_build.yml?branch=master)](https://github.com/intel/pcm/actions/workflows/macosx_build.yml?query=branch%3Amaster)
 - Docker container: [![GitHub Workflow Status](https://img.shields.io/github/actions/workflow/status/intel/pcm/docker.yml?branch=master)](doc/DOCKER_README.md)
 
 --------------------------------------------------------------------------------
@@ -55,10 +54,9 @@ PCM provides a number of command-line utilities for real-time monitoring:
 Graphical front ends:
 - **pcm Grafana dashboard** :  front-end for Grafana (in [scripts/grafana](scripts/grafana) directory). Full Grafana Readme is [here](scripts/grafana/README.md)
 ![pcm grafana output](https://raw.githubusercontent.com/wiki/intel/pcm/pcm-dashboard.png)
-- **pcm-sensor** :  front-end for KDE KSysGuard
 - **pcm-service** :  front-end for Windows perfmon
 
-There are also utilities for reading/writing model specific registers (**pcm-msr**), PCI configuration registers (**pcm-pcicfg**), memory mapped registers (**pcm-mmio**) and TPMI registers (**pcm-tpmi**) supported on Linux, Windows, Mac OS X and FreeBSD.
+There are also utilities for reading/writing model specific registers (**pcm-msr**), PCI configuration registers (**pcm-pcicfg**), memory mapped registers (**pcm-mmio**) and TPMI registers (**pcm-tpmi**) supported on Linux, Windows, FreeBSD and DragonFlyBSD.
 
 And finally a daemon that stores core, memory and QPI counters in shared memory that can be be accessed by non-root users.
 
@@ -98,7 +96,7 @@ Debug is default on Windows. Specify config to build Release:
 ```
 cmake --build . --config Release
 ```
-On Windows and MacOs additional drivers and steps are required. Please find instructions here: [WINDOWS_HOWTO.md](doc/WINDOWS_HOWTO.md) and [MAC_HOWTO.txt](doc/MAC_HOWTO.txt).
+On Windows additional drivers and steps are required. Please find instructions here: [WINDOWS_HOWTO.md](doc/WINDOWS_HOWTO.md).
 
 FreeBSD/DragonFlyBSD-specific details can be found in [FREEBSD_HOWTO.txt](doc/FREEBSD_HOWTO.txt)
 

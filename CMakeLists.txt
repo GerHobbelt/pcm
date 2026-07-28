@@ -46,6 +46,9 @@ if(PCM_X_ARTIFACTS)
 endif()
 
 message(STATUS "System: ${CMAKE_SYSTEM}")
+if(APPLE)
+    message(FATAL_ERROR "macOS/OSX is not supported.")
+endif()
 if(UNIX AND NOT APPLE)
     if(${CMAKE_SYSTEM_NAME} STREQUAL "FreeBSD")
         set(FREE_BSD TRUE)
@@ -54,7 +57,7 @@ if(UNIX AND NOT APPLE)
     endif()
 endif()
 
-if(UNIX)  # APPLE, LINUX, FREE_BSD
+if(UNIX)  # LINUX, FREE_BSD
     if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
       set(CMAKE_BUILD_TYPE "Release" CACHE STRING "Build type (default Release)" FORCE)
     endif()
@@ -100,10 +103,6 @@ if(UNIX)  # APPLE, LINUX, FREE_BSD
          set (PCM_DYNAMIC "-rdynamic")
     elseif()
          set (PCM_DYNAMIC "")
-    endif()
-    if(APPLE)
-       set(PCM_NO_ASAN ON)
-       message(STATUS "AddressSanitizer is currently disabled on MacOS")
     endif()
     if(PCM_NO_ASAN)
         message(STATUS "AddressSanitizer is disabled")
@@ -226,7 +225,7 @@ if(UNIX)
     Intel(r) Performance Counter Monitor (Intel(r) PCM) is an application programming\n\
     interface (API) and a set of tools based on the API to monitor\n\
     performance and energy metrics of Intel(r) Core(tm), Xeon(r), Atom(tm)\n\
-    and Xeon Phi(tm) processors. PCM works on Linux, Windows, Mac OS X,\n\
+    and Xeon Phi(tm) processors. PCM works on Linux, Windows,\n\
     FreeBSD and DragonFlyBSD operating systems.")
     set(CPACK_RPM_PACKAGE_DESCRIPTION ${CPACK_PACKAGE_DESCRIPTION})
 

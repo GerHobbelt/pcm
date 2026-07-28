@@ -58,7 +58,6 @@ int main()
         std::cout << "\nNote: This is normal on:\n";
         std::cout << "  - Single-socket systems\n";
         std::cout << "  - Systems without NUMA support\n";
-        std::cout << "  - macOS (not implemented)\n";
         std::cout << "  - FreeBSD without NUMA enabled (vm.ndomains <= 1)\n";
     }
     

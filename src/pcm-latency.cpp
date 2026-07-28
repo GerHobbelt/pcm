@@ -42,6 +42,16 @@ using namespace pcm;
 #define PCM_DELAY_DEFAULT 3.0 // in seconds
 #define MAX_CORES 4096
 
+// Core PMU event encodings used for the L1 fill-buffer latency metric
+// (verified against the perfmon core event JSONs for HSX/BDX/SKX/ICX/SPR/EMR/SKL).
+constexpr uint64 EVENT_L1D_PEND_MISS = 0x48;       // L1D_PEND_MISS
+constexpr uint64 UMASK_L1D_PEND_MISS_PENDING = 0x01; // .PENDING -> L1d fill-buffer occupancy
+constexpr uint64 EVENT_MEM_LOAD_RETIRED = 0xd1;    // MEM_LOAD_RETIRED / MEM_LOAD_UOPS_RETIRED
+constexpr uint64 UMASK_MEM_LOAD_RETIRED_FB_HIT = 0x40; // .FB_HIT (HIT_LFB on HSX/BDX)
+constexpr uint64 UMASK_MEM_LOAD_RETIRED_L1_MISS = 0x08; // .L1_MISS
+constexpr uint64 UMASK_MEM_LOAD_RETIRED_FB_HIT_OR_L1_MISS =
+    UMASK_MEM_LOAD_RETIRED_FB_HIT | UMASK_MEM_LOAD_RETIRED_L1_MISS; // fill-buffer inserts
+
 EventSelectRegister regs[2];
 const uint8_t max_sockets = 64;
 
@@ -200,40 +210,47 @@ void store_latency_core(PCM *m)
 
 void print_verbose(PCM *m, int ddr_ip)
 {
-    cout << "L1 Cache Latency ============================= \n";
-    for (unsigned int i=0; i<m->getNumCores(); i++)
+    if (m->LatencyMetricsAvailable())
     {
-        cout << "Core: " << i << "\n";
-        cout << "L1 Occupancy read: " << core_latency[0].core[i].occ_rd << "\n";
-        cout << "L1 Inserts read: " << core_latency[0].core[i].insert_rd << "\n";
-        cout << "\n";
+        cout << "L1 Cache Latency ============================= \n";
+        for (unsigned int i=0; i<m->getNumCores(); i++)
+        {
+            cout << "Core: " << i << "\n";
+            cout << "L1 Occupancy read: " << core_latency[0].core[i].occ_rd << "\n";
+            cout << "L1 Inserts read: " << core_latency[0].core[i].insert_rd << "\n";
+            cout << "\n";
+        }
     }
     if (ddr_ip == DDR)
     {
         cout << "DDR Latency =================================\n";
-        cout << "Read Inserts Socket0: " << uncore_event[DDR].skt[0].rinsert << "\n";
-        cout << "Read Occupancy Socket0: " << uncore_event[DDR].skt[0].roccupancy << "\n";
-        cout << "Read Inserts Socket1: " << uncore_event[DDR].skt[1].rinsert << "\n";
-        cout << "Read Occupancy Socket1: " << uncore_event[DDR].skt[1].roccupancy << "\n";
+        for (unsigned int n=0; n<m->getNumSockets(); n++)
+        {
+            cout << "Read Inserts Socket" << n << ": " << uncore_event[DDR].skt[n].rinsert << "\n";
+            cout << "Read Occupancy Socket" << n << ": " << uncore_event[DDR].skt[n].roccupancy << "\n";
+        }
         cout << "\n";
-        cout << "Write Inserts Socket0: " << uncore_event[DDR].skt[0].winsert << "\n";
-        cout << "Write Occupancy Socket0: " << uncore_event[DDR].skt[0].woccupancy << "\n";
-        cout << "Write Inserts Socket1: " << uncore_event[DDR].skt[1].winsert << "\n";
-        cout << "Write Occupancy Socket1: " << uncore_event[DDR].skt[1].woccupancy << "\n";
+        for (unsigned int n=0; n<m->getNumSockets(); n++)
+        {
+            cout << "Write Inserts Socket" << n << ": " << uncore_event[DDR].skt[n].winsert << "\n";
+            cout << "Write Occupancy Socket" << n << ": " << uncore_event[DDR].skt[n].woccupancy << "\n";
+        }
     }
 
     if (ddr_ip == PMM)
     {
         cout << "PMM Latency =================================\n";
-        cout << "Read Inserts Socket0: " << uncore_event[PMM].skt[0].rinsert << "\n";
-        cout << "Read Occupancy Socket0: " << uncore_event[PMM].skt[0].roccupancy << "\n";
-        cout << "Read Inserts Socket1: " << uncore_event[PMM].skt[1].rinsert << "\n";
-        cout << "Read Occupancy Socket1: " << uncore_event[PMM].skt[1].roccupancy << "\n";
+        for (unsigned int n=0; n<m->getNumSockets(); n++)
+        {
+            cout << "Read Inserts Socket" << n << ": " << uncore_event[PMM].skt[n].rinsert << "\n";
+            cout << "Read Occupancy Socket" << n << ": " << uncore_event[PMM].skt[n].roccupancy << "\n";
+        }
         cout << "\n";
-        cout << "Write Inserts Socket0: " << uncore_event[PMM].skt[0].winsert << "\n";
-        cout << "Write Occupancy Socket0: " << uncore_event[PMM].skt[0].woccupancy << "\n";
-        cout << "Write Inserts Socket1: " << uncore_event[PMM].skt[1].winsert << "\n";
-        cout << "Write Occupancy Socket1: " << uncore_event[PMM].skt[1].woccupancy << "\n";
+        for (unsigned int n=0; n<m->getNumSockets(); n++)
+        {
+            cout << "Write Inserts Socket" << n << ": " << uncore_event[PMM].skt[n].winsert << "\n";
+            cout << "Write Occupancy Socket" << n << ": " << uncore_event[PMM].skt[n].woccupancy << "\n";
+        }
     }
 }
 
@@ -310,34 +327,37 @@ void print_core_stats(PCM *m, unsigned int core_size_per_socket, vector<vector<v
 
 void print_all_stats(PCM *m, bool enable_pmm, bool enable_verbose)
 {
-    vector < vector < vector < struct core_info >>> sk_th;
-    unsigned int sid, cid, tid;
-    unsigned int core_size_per_socket=0;
-   //Populate Core info per Socket and thread_id
-   //Create 3D vector with Socket as 1D, Thread as 2D and Core info for the 3D
-    for (sid = 0; sid < m->getNumSockets(); sid++)
+    if (m->LatencyMetricsAvailable())
     {
-        vector < vector <core_info> > tmp_thread;
-        for (tid = 0; tid < m->getThreadsPerCore(); tid++)
+        vector < vector < vector < struct core_info >>> sk_th;
+        unsigned int sid, cid, tid;
+        unsigned int core_size_per_socket=0;
+       //Populate Core info per Socket and thread_id
+       //Create 3D vector with Socket as 1D, Thread as 2D and Core info for the 3D
+        for (sid = 0; sid < m->getNumSockets(); sid++)
         {
-            vector <core_info> tmp_core;
-            for (cid = 0; cid < m->getNumCores(); cid++)
+            vector < vector <core_info> > tmp_thread;
+            for (tid = 0; tid < m->getThreadsPerCore(); tid++)
             {
-                if ((sid == (unsigned int)(m->getSocketId(cid))) && (tid == (unsigned int)(m->getThreadId(cid))))
+                vector <core_info> tmp_core;
+                for (cid = 0; cid < m->getNumCores(); cid++)
                 {
-                core_info tmp;
-                tmp.core_id = cid;
-                tmp.latency = core_latency[L1].core[cid].latency;
-                tmp_core.push_back(tmp);
+                    if ((sid == (unsigned int)(m->getSocketId(cid))) && (tid == (unsigned int)(m->getThreadId(cid))))
+                    {
+                    core_info tmp;
+                    tmp.core_id = cid;
+                    tmp.latency = core_latency[L1].core[cid].latency;
+                    tmp_core.push_back(tmp);
+                    }
                 }
+                core_size_per_socket = (unsigned int)tmp_core.size();
+                tmp_thread.push_back(tmp_core);
             }
-            core_size_per_socket = (unsigned int)tmp_core.size();
-            tmp_thread.push_back(tmp_core);
+            sk_th.push_back(tmp_thread);
         }
-        sk_th.push_back(tmp_thread);
-    }
 
-    print_core_stats(m, core_size_per_socket, sk_th);
+        print_core_stats(m, core_size_per_socket, sk_th);
+    }
 
     if (m->DDRLatencyMetricsAvailable())
     {
@@ -364,7 +384,7 @@ void check_status(PCM *m, PCM::ErrorCode status)
     m->checkError(status);
     print_cpu_details();
 
-    if(!(m->LatencyMetricsAvailable()))
+    if(!(m->LatencyMetricsAvailable()) && !(m->DDRLatencyMetricsAvailable()))
     {
         cerr << "Platform not Supported! Program aborted\n";
         exit(EXIT_FAILURE);
@@ -387,22 +407,11 @@ void build_registers(PCM *m, PCM::ExtendedCustomCoreEventDescription conf, bool 
         exit(EXIT_FAILURE);
     }
 
-    //Check for Maximum Custom Core Events
-    if (m->getMaxCustomCoreEvents() < 2)
-    {
-        cout << "System should support a minimum of 2 Custom Core Events to run pcm-latency\n";
-        exit(EXIT_FAILURE);
-    }
-//Creating conf
-    conf.fixedCfg = NULL; // default
-    conf.nGPCounters = 2;
-    conf.gpCounterCfg = regs;
-    conf.OffcoreResponseMsrValue[0] = 0;
-    conf.OffcoreResponseMsrValue[1] = 0;
-
-// Registers for L1 cache
-    regs[FB_OCC_RD] = build_core_register(FB_OCC_RD, 0, 1, 1, 1, 0x01, 0x48, 0); //L1d Fill Buffer Occupancy (Read Only)
-    regs[FB_INS_RD] = build_core_register(FB_INS_RD, 0, 1, 1, 1, 0x48, 0xd1, 0); //MEM_LOAD_RETIRED(FB_HIT + L1_MISS)
+    // Core L1 fill-buffer latency requires the L1D_PEND_MISS / MEM_LOAD_RETIRED core
+    // events, which only exist on the P-core parts covered by LatencyMetricsAvailable().
+    // On parts that only support DDR uncore latency (e.g. the E-core SRF/CWF) we skip the
+    // core path and report DDR latency only.
+    const bool core_latency_available = m->LatencyMetricsAvailable();
 
 //Restructuring Counters
     for (int i=0; i <5; i++)
@@ -414,9 +423,35 @@ void build_registers(PCM *m, PCM::ExtendedCustomCoreEventDescription conf, bool 
 
 //Program Core and Uncore
     m->resetPMU();
-    PCM::ErrorCode status = m->program(PCM::EXT_CUSTOM_CORE_EVENTS, &conf);
-    check_status(m, status);
-    m->programServerUncoreLatencyMetrics(enable_pmm);
+    if (core_latency_available)
+    {
+        //Check for Maximum Custom Core Events
+        if (m->getMaxCustomCoreEvents() < 2)
+        {
+            cout << "System should support a minimum of 2 Custom Core Events to run pcm-latency\n";
+            exit(EXIT_FAILURE);
+        }
+    //Creating conf
+        conf.fixedCfg = NULL; // default
+        conf.nGPCounters = 2;
+        conf.gpCounterCfg = regs;
+        conf.OffcoreResponseMsrValue[0] = 0;
+        conf.OffcoreResponseMsrValue[1] = 0;
+
+    // Registers for L1 cache
+        regs[FB_OCC_RD] = build_core_register(FB_OCC_RD, 0, 1, 1, 1, UMASK_L1D_PEND_MISS_PENDING, EVENT_L1D_PEND_MISS, 0); //L1d Fill Buffer Occupancy (Read Only)
+        regs[FB_INS_RD] = build_core_register(FB_INS_RD, 0, 1, 1, 1, UMASK_MEM_LOAD_RETIRED_FB_HIT_OR_L1_MISS, EVENT_MEM_LOAD_RETIRED, 0); //MEM_LOAD_RETIRED(FB_HIT + L1_MISS)
+
+        PCM::ErrorCode status = m->program(PCM::EXT_CUSTOM_CORE_EVENTS, &conf);
+        check_status(m, status);
+        m->checkError(m->programServerUncoreLatencyMetrics(enable_pmm));
+    }
+    else
+    {
+        // DDR-only path (no core L1 latency events, e.g. E-core SRF/CWF): just program the
+        // server uncore latency metrics and validate that, like pcm-memory does.
+        check_status(m, m->programServerUncoreLatencyMetrics(enable_pmm));
+    }
 }
 
 void collect_data(PCM *m, bool enable_pmm, bool enable_verbose, int delay_ms, MainLoop & mainLoop)
@@ -425,18 +460,23 @@ void collect_data(PCM *m, bool enable_pmm, bool enable_verbose, int delay_ms, Ma
     BeforeState = new ServerUncoreCounterState[m->getNumSockets()];
     AfterState = new ServerUncoreCounterState[m->getNumSockets()];
 
+    const bool core_latency_available = m->LatencyMetricsAvailable();
+
     mainLoop([&]()
     {
         collect_beforestate_uncore(m);
-        collect_beforestate_core(m);
+        if (core_latency_available)
+            collect_beforestate_core(m);
 
 	MySleepMs(delay_ms);
 
         collect_afterstate_uncore(m);
-        collect_afterstate_core(m);
+        if (core_latency_available)
+            collect_afterstate_core(m);
 
 	store_latency_uncore(m, enable_pmm, delay_ms);// 0 for DDR
-	store_latency_core(m);
+	if (core_latency_available)
+	    store_latency_core(m);
 
         print_all_stats(m, enable_pmm, enable_verbose);
         std::cout << std::flush;

@@ -177,63 +177,6 @@ OwnMMIORange::~OwnMMIORange()
     CloseHandle(hDriver);
 }
 
-#elif __APPLE__
-
-#include "PCIDriverInterface.h"
-
-MMIORange::MMIORange(const uint64 physical_address, const uint64 size_, const bool, const bool silent_, const int core_) :
-    mmapAddr(NULL),
-    size(size_),
-    silent(silent_),
-    core(core_)
-{
-    if (core_ >= 0)
-    {
-        throw std::runtime_error("MMIORange on MacOSX does not support core affinity");
-    }
-    if (size > 4096)
-    {
-        if (!silent)
-        {
-            std::cerr << "PCM Error: the driver does not support mapping of regions > 4KB\n";
-        }
-        return;
-    }
-    if (physical_address) {
-        PCIDriver_mapMemory((uint32_t)physical_address, (uint8_t **)&mmapAddr);
-    }
-}
-
-uint32 MMIORange::read32(uint64 offset)
-{
-    warnAlignment<4>("MMIORange::read32", silent, offset);
-    uint32 val = 0;
-    PCIDriver_readMemory32((uint8_t *)mmapAddr + offset, &val);
-    return val;
-}
-
-uint64 MMIORange::read64(uint64 offset)
-{
-    warnAlignment<8>("MMIORange::read64", silent, offset);
-    uint64 val = 0;
-    PCIDriver_readMemory64((uint8_t *)mmapAddr + offset, &val);
-    return val;
-}
-
-void MMIORange::write32(uint64 offset, uint32 val)
-{
-    std::cerr << "PCM Error: the driver does not support writing to MMIORange\n";
-}
-void MMIORange::write64(uint64 offset, uint64 val)
-{
-    std::cerr << "PCM Error: the driver does not support writing to MMIORange\n";
-}
-
-MMIORange::~MMIORange()
-{
-    if(mmapAddr) PCIDriver_unmapMemory((uint8_t *)mmapAddr);
-}
-
 #elif defined(__linux__) || defined(__FreeBSD__) || defined(__DragonFly__)
 
 MMIORange::MMIORange(const uint64 baseAddr_, const uint64 size_, const bool readonly_, const bool silent_, const int core_) :

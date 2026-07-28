@@ -26,7 +26,6 @@ int main()
         // On Linux: uses /proc/bus/pci/ or PciHandleMM for memory-mapped access
         // On Windows: uses Windows driver
         // On FreeBSD: uses /dev/pci
-        // On macOS: uses PCIDriver
         PciHandleType handle(segment, bus, device, function);
         
         std::cout << "Successfully opened PCI device " 

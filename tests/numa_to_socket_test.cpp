@@ -56,7 +56,6 @@ int main()
         std::cout << "This may be expected on:\n";
         std::cout << "  - Single-socket systems\n";
         std::cout << "  - Systems without NUMA support\n";
-        std::cout << "  - macOS (not implemented)\n";
         std::cout << "  - Systems where NUMA information is not available\n";
     }
     

@@ -495,66 +495,6 @@ static void readSRATTable(std::unordered_map<uint64_t, uint32_t>& pciToNuma)
     DBG(2, "SRAT parsing complete, found ", pciToNuma.size(), " PCI device entries");
 }
 
-#elif __APPLE__
-
-PciHandle::PciHandle(uint32, uint32 bus_, uint32 device_, uint32 function_) :
-    fd(-1),
-    bus(bus_),
-    device(device_),
-    function(function_),
-    numaNode(-1)
-{ }
-
-int32 PciHandle::getNUMANode() const
-{
-    return numaNode;
-}
-
-bool PciHandle::exists(uint32 groupnr_, uint32 bus_, uint32 device_, uint32 function_)
-{
-    if (groupnr_ != 0)
-    {
-        std::cerr << "Non-zero PCI group segments are not supported in PCM/APPLE OSX\n";
-        return false;
-    }
-    uint32_t pci_address = FORM_PCI_ADDR(bus_, device_, function_, 0);
-    uint32_t value = 0;
-    PCIDriver_read32(pci_address, &value);
-    uint32_t vendor_id = value & 0xffff;
-    uint32_t device_id = (value >> 16) & 0xffff;
-
-    //if (vendor_id == PCM_INTEL_PCI_VENDOR_ID) {
-    if (vendor_id != 0xffff && device_id != 0xffff) {
-        return true;
-    } else {
-        return false;
-    }
-}
-
-int32 PciHandle::read32(uint64 offset, uint32 * value)
-{
-    warnAlignment<4>("PciHandle::read32", false, offset);
-    uint32_t pci_address = FORM_PCI_ADDR(bus, device, function, (uint32_t)offset);
-    return PCIDriver_read32(pci_address, value);
-}
-
-int32 PciHandle::write32(uint64 offset, uint32 value)
-{
-    warnAlignment<4>("PciHandle::write32", false, offset);
-    uint32_t pci_address = FORM_PCI_ADDR(bus, device, function, (uint32_t)offset);
-    return PCIDriver_write32(pci_address, value);
-}
-
-int32 PciHandle::read64(uint64 offset, uint64 * value)
-{
-    warnAlignment<4>("PciHandle::read64", false, offset);
-    uint32_t pci_address = FORM_PCI_ADDR(bus, device, function, (uint32_t)offset);
-    return PCIDriver_read64(pci_address, value);
-}
-
-PciHandle::~PciHandle()
-{ }
-
 #elif defined (__FreeBSD__) || defined(__DragonFly__)
 
 // Helper function to compute NUMA node for FreeBSD

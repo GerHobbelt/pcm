@@ -289,6 +289,7 @@ ccr* get_ccr(uint32 cpu_family_model, uint64_t& ccr)
         case PCM::SRF:
         case PCM::GNR:
         case PCM::GNR_D:
+        case PCM::CWF:
             return new pcm::ccr(ccr, ccr::ccr_type::icx);
         default:
             std::cerr << PCM::cpuFamilyModelToUArchCodename(cpu_family_model) << " is not supported! Program aborted" << std::endl;

@@ -23,10 +23,6 @@
 #include <unistd.h>
 #endif
 
-#ifdef __APPLE__
-#include "PCIDriverInterface.h"
-#endif
-
 #include <vector>
 
 namespace pcm {
@@ -79,9 +75,6 @@ public:
 };
 
 #ifdef _MSC_VER
-typedef PciHandle PciHandleType;
-#elif __APPLE__
-// This may need to change if it can be implemented for OSX
 typedef PciHandle PciHandleType;
 #elif defined(__FreeBSD__) || defined(__DragonFly__)
 typedef PciHandle PciHandleType;

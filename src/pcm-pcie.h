@@ -1215,6 +1215,7 @@ inline IPlatform *IPlatform::getPlatform(PCM *m, bool csv, bool bandwidth,
         case PCM::GNR:
         case PCM::GNR_D:
         case PCM::SRF:
+        case PCM::CWF:
             return new BirchStreamPlatform(m, csv, bandwidth, verbose, delay);
         case PCM::GRR:
             return new LoganvillePlatform(m, csv, bandwidth, verbose, delay);

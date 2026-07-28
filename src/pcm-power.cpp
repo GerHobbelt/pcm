@@ -870,6 +870,7 @@ int mainThrows(int argc, char * argv[])
                     metrics.push_back(Metric("Thermal freq limit cycles", 100. * getNormalizedPCUCounter(u, 1, BeforeState[socket], AfterState[socket]), "%"));
                     metrics.push_back(Metric("Power freq limit cycles", 100. * getNormalizedPCUCounter(u, 2, BeforeState[socket], AfterState[socket]), "%"));
                     if (cpu_family_model != PCM::SKX
+                        && cpu_family_model != PCM::CWF
                         && cpu_family_model != PCM::ICX
                         && cpu_family_model != PCM::SNOWRIDGE
                         && cpu_family_model != PCM::SPR
@@ -885,6 +886,7 @@ int mainThrows(int argc, char * argv[])
 
                 case 4:
                     if (    cpu_family_model == PCM::SKX
+                         || cpu_family_model == PCM::CWF
                          || cpu_family_model == PCM::ICX
                          || cpu_family_model == PCM::SNOWRIDGE
                          || cpu_family_model == PCM::SPR
@@ -924,6 +926,7 @@ int mainThrows(int argc, char * argv[])
                     }
                     switch (cpu_family_model)
                     {
+                    case PCM::CWF:
                     case PCM::IVYTOWN:
                     case PCM::HASWELLX:
                     case PCM::BDX_DE:

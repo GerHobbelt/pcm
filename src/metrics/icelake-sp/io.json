@@ -1,0 +1,127 @@
+{
+    "metrics": [
+        {
+            "name": "PCIRdCur (B)",
+            "formula": "(UNC_CHA_TOR_INSERTS.IO_MISS_PCIRDCUR + UNC_CHA_TOR_INSERTS.IO_HIT_PCIRDCUR) * 64",
+            "short_name": "PCIRdCur",
+            "aggregation": "socket",
+            "description": "Total PCIe read bytes, calculated as the sum of PCIe full cache line read misses and hits multiplied by 64 bytes per cache line."
+        },
+        {
+            "name": "PCIRdCur Miss (B)",
+            "formula": "UNC_CHA_TOR_INSERTS.IO_MISS_PCIRDCUR * 64",
+            "short_name": "PCIRdCur Miss",
+            "aggregation": "socket",
+            "description": "Total PCIe read bytes due to full cache line read misses multiplied by 64 bytes per cache line."
+        },
+        {
+            "name": "PCIRdCur Hit (B)",
+            "formula": "UNC_CHA_TOR_INSERTS.IO_HIT_PCIRDCUR * 64",
+            "short_name": "PCIRdCur Hit",
+            "aggregation": "socket",
+            "description": "Total PCIe read bytes due to full cache line read hits multiplied by 64 bytes per cache line."
+        },
+        {
+            "name": "ItoM (B)",
+            "formula": "(UNC_CHA_TOR_INSERTS.IO_MISS_ITOM + UNC_CHA_TOR_INSERTS.IO_HIT_ITOM) * 64",
+            "short_name": "ItoM",
+            "aggregation": "socket",
+            "description": "Total PCIe write bytes, calculated as the sum of PCIe full cache line write misses and hits multiplied by 64 bytes per cache line."
+        },
+        {
+            "name": "ItoM Miss (B)",
+            "formula": "UNC_CHA_TOR_INSERTS.IO_MISS_ITOM * 64",
+            "short_name": "ItoM Miss",
+            "aggregation": "socket",
+            "description": "Total PCIe write bytes due to full cache line write misses multiplied by 64 bytes per cache line."
+        },
+        {
+            "name": "ItoM Hit (B)",
+            "formula": "UNC_CHA_TOR_INSERTS.IO_HIT_ITOM * 64",
+            "short_name": "ItoM Hit",
+            "aggregation": "socket",
+            "description": "Total PCIe write bytes due to full cache line write hits multiplied by 64 bytes per cache line."
+        },
+        {
+            "name": "ItoMCacheNear (B)",
+            "formula": "(UNC_CHA_TOR_INSERTS.IO_MISS_ITOMCACHENEAR + UNC_CHA_TOR_INSERTS.IO_HIT_ITOMCACHENEAR) * 64",
+            "short_name": "ItoMCacheNear",
+            "aggregation": "socket",
+            "description": "Total PCIe write bytes for partial cache line writes, calculated as the sum of partial write misses and hits multiplied by 64 bytes per cache line."
+        },
+        {
+            "name": "ItoMCacheNear Miss (B)",
+            "formula": "UNC_CHA_TOR_INSERTS.IO_MISS_ITOMCACHENEAR * 64",
+            "short_name": "ItoMCacheNear Miss",
+            "aggregation": "socket",
+            "description": "Total PCIe write bytes for partial cache line write misses multiplied by 64 bytes per cache line."
+        },
+        {
+            "name": "ItoMCacheNear Hit (B)",
+            "formula": "UNC_CHA_TOR_INSERTS.IO_HIT_ITOMCACHENEAR * 64",
+            "short_name": "ItoMCacheNear Hit",
+            "aggregation": "socket",
+            "description": "Total PCIe write bytes for partial cache line write hits multiplied by 64 bytes per cache line."
+        },
+        {
+            "name": "Total Read (B)",
+            "formula": "(UNC_CHA_TOR_INSERTS.IO_MISS_PCIRDCUR + UNC_CHA_TOR_INSERTS.IO_HIT_PCIRDCUR) * 64",
+            "short_name": "Total Read (B)",
+            "aggregation": "system",
+            "description": "Total PCIe read bytes system-wide, calculated as the sum of PCIe full cache line read misses and hits multiplied by 64 bytes per cache line."
+        },
+        {
+            "name": "Total Write (B)",
+            "formula": "(UNC_CHA_TOR_INSERTS.IO_MISS_ITOM + UNC_CHA_TOR_INSERTS.IO_HIT_ITOM + UNC_CHA_TOR_INSERTS.IO_MISS_ITOMCACHENEAR + UNC_CHA_TOR_INSERTS.IO_HIT_ITOMCACHENEAR) * 64",
+            "short_name": "Total Write (B)",
+            "aggregation": "system",
+            "description": "Total PCIe write bytes system-wide, calculated as the sum of all PCIe write misses and hits (both full and partial cache line) multiplied by 64 bytes per cache line."
+        },
+        {
+            "name": "WCILF",
+            "formula": "UNC_CHA_TOR_INSERTS.IA_WCILF",
+            "short_name": "WCILF",
+            "aggregation": "socket",
+            "description": "Number of full cache line write requests issued by CPU to IO device. Includes MOVDIR64."
+        },
+        {
+            "name": "WCIL",
+            "formula": "UNC_CHA_TOR_INSERTS.IA_WCIL",
+            "short_name": "WCIL",
+            "aggregation": "socket",
+            "description": "Number of partial cache line write requests issued by CPU to IO device. Includes MOVDIRI."
+        },
+        {
+            "name": "WiL Miss",
+            "formula": "UNC_CHA_TOR_INSERTS.IA_MISS_WIL",
+            "short_name": "WiL Miss",
+            "aggregation": "socket",
+            "description": "Number of WiL (Write Invalidate Line) requests issued by CPU that missed cache."
+        },
+        {
+            "name": "UCRdF Miss",
+            "formula": "UNC_CHA_TOR_INSERTS.IA_MISS_UCRDF",
+            "short_name": "UCRdF Miss",
+            "aggregation": "socket",
+            "description": "Number of UCRdF (Uncached Read Full) requests issued by CPU that missed cache."
+        }
+    ],
+    "layout": {
+        "sections": [
+            {
+                "title": "PCIe Data",
+                "rows": ["Total", "Miss", "Hit"],
+                "columns": {
+                    "PCIRdCur (B)": ["PCIRdCur (B)", "PCIRdCur Miss (B)", "PCIRdCur Hit (B)"],
+                    "ItoM (B)": ["ItoM (B)", "ItoM Miss (B)", "ItoM Hit (B)"],
+                    "ItoMCacheNear (B)": ["ItoMCacheNear (B)", "ItoMCacheNear Miss (B)", "ItoMCacheNear Hit (B)"]
+                },
+                "system-wide-metrics": ["Total Read (B)", "Total Write (B)"]
+            },
+            {
+                "title": "MMIO Access",
+                "metrics": ["WCILF", "WCIL", "WiL Miss", "UCRdF Miss"]
+            }
+        ]
+    }
+}

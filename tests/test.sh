@@ -492,7 +492,7 @@ online_offline_cores 1
 echo "Running Unit Tests"
 failed=()
 for test_binary in ./tests/utests/*; do
-    if [ -x "$test_binary" ]; then
+    if [ -x "$test_binary" ] && [ -f "$test_binary" ]; then
         echo "Running $test_binary"
         "$test_binary"
         if [ "$?" -ne "0" ]; then

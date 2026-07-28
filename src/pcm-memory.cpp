@@ -425,6 +425,7 @@ void printSocketBWFooter(PCM *m, uint32 no_columns, uint32 skt, const memdata_t 
         cout << "\n";
     }
     if (    md->metrics == PartialWrites
+        &&  m->getCPUFamilyModel() != PCM::CWF
         &&  m->getCPUFamilyModel() != PCM::SRF
         &&  m->getCPUFamilyModel() != PCM::GNR
         &&  m->getCPUFamilyModel() != PCM::GNR_D
@@ -739,6 +740,7 @@ void display_bandwidth_csv(PCM *m, memdata_t *md, uint64 /*elapsedTime*/, const 
         if (m->HBMmemoryTrafficMetricsAvailable() == false)
         {
             if (    md->metrics == PartialWrites
+                &&  m->getCPUFamilyModel() != PCM::CWF
                 &&  m->getCPUFamilyModel() != PCM::GNR
                 &&  m->getCPUFamilyModel() != PCM::GNR_D
                 &&  m->getCPUFamilyModel() != PCM::SRF
@@ -1005,6 +1007,7 @@ void calculate_bandwidth(PCM *m,
                 writes = getMCCounter(channel, ServerUncorePMUs::EventPosition::WRITE, uncState1[skt], uncState2[skt]);
                 switch (cpu_family_model)
                 {
+                case PCM::CWF:
                 case PCM::GNR:
                 case PCM::GNR_D:
                 case PCM::GRR:
@@ -1073,6 +1076,7 @@ void calculate_bandwidth(PCM *m,
                 else if (
                    cpu_family_model != PCM::GNR
                 && cpu_family_model != PCM::GNR_D
+                && cpu_family_model != PCM::CWF
                 && cpu_family_model != PCM::SRF
                 && cpu_family_model != PCM::GRR
                     )
