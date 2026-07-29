@@ -61,7 +61,6 @@ rm -rf $RPM_BUILD_ROOT
 /usr/share/doc/PCM/FAQ.md
 /usr/share/doc/PCM/FREEBSD_HOWTO.txt
 /usr/share/doc/PCM/LINUX_HOWTO.txt
-/usr/share/doc/PCM/MAC_HOWTO.txt
 /usr/share/doc/PCM/PCM-EXPORTER.md
 /usr/share/doc/PCM/PCM-SENSOR-SERVER-README.md
 /usr/share/doc/PCM/PCM_RAW_README.md
@@ -71,6 +70,7 @@ rm -rf $RPM_BUILD_ROOT
 /usr/share/licenses/pcm/LICENSE
 %{_sbindir}/pcm-core
 %{_sbindir}/pcm-iio
+%{_sbindir}/pcm-io
 %{_sbindir}/pcm-latency
 %{_sbindir}/pcm-memory
 %{_sbindir}/pcm-msr
