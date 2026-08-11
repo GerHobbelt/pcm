@@ -16,6 +16,7 @@ file(GLOB READ_NUMBER_TEST_FILES read-number-utest.cpp)
 file(GLOB EVENT_RESOLVER_TEST_FILES event-resolver-utest.cpp ${CMAKE_SOURCE_DIR}/src/event-resolver.cpp)
 file(GLOB PCM_IO_METRICS_TEST_FILES pcm-io-metrics-utest.cpp ${CMAKE_SOURCE_DIR}/src/pcm-io-metrics.cpp)
 file(GLOB PCM_SENSOR_SERVER_OVERFLOW_TEST_FILES pcm-sensor-server-overflow-utest.cpp)
+file(GLOB PCM_SENSOR_SERVER_CONTENT_LENGTH_TEST_FILES pcm-sensor-server-content-length-utest.cpp)
 file(GLOB PCM_SENSOR_SERVER_HEADER_LIMITS_TEST_FILES pcm-sensor-server-header-limits-utest.cpp)
 
 set(LIBS Threads::Threads PCM_STATIC)
@@ -26,6 +27,7 @@ add_executable(read-number-utest ${READ_NUMBER_TEST_FILES})
 add_executable(event-resolver-utest ${EVENT_RESOLVER_TEST_FILES})
 add_executable(pcm-io-metrics-utest ${PCM_IO_METRICS_TEST_FILES})
 add_executable(pcm-sensor-server-overflow-utest ${PCM_SENSOR_SERVER_OVERFLOW_TEST_FILES})
+add_executable(pcm-sensor-server-content-length-utest ${PCM_SENSOR_SERVER_CONTENT_LENGTH_TEST_FILES})
 add_executable(pcm-sensor-server-header-limits-utest ${PCM_SENSOR_SERVER_HEADER_LIMITS_TEST_FILES})
 
 configure_file(
@@ -89,6 +91,13 @@ target_link_libraries(
 )
 
 target_link_libraries(
+    pcm-sensor-server-content-length-utest
+    GTest::gtest_main
+    GTest::gmock_main
+    ${LIBS}
+)
+
+target_link_libraries(
     pcm-sensor-server-header-limits-utest
     GTest::gtest_main
     GTest::gmock_main
@@ -102,4 +111,5 @@ gtest_discover_tests(read-number-utest)
 gtest_discover_tests(event-resolver-utest)
 gtest_discover_tests(pcm-io-metrics-utest)
 gtest_discover_tests(pcm-sensor-server-overflow-utest)
+gtest_discover_tests(pcm-sensor-server-content-length-utest)
 gtest_discover_tests(pcm-sensor-server-header-limits-utest)
