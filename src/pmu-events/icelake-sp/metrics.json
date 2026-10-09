@@ -1,0 +1,102 @@
+{
+    "metrics": [
+        {
+            "name": "PCIe Rd (B)",
+            "formula": "UNC_CHA_TOR_INSERTS.IO_PCIRDCUR * 64",
+            "short_name": "PCIeRd",
+            "aggregation": "socket"
+        },
+        {
+            "name": "PCIe Wr (B)",
+            "formula": "(UNC_CHA_TOR_INSERTS.IO_ITOM + UNC_CHA_TOR_INSERTS.IO_ITOMCACHENEAR) * 64",
+            "short_name": "PCIeWr",
+            "aggregation": "socket"
+        },
+        {
+            "name": "PCIRdCur",
+            "formula": "UNC_CHA_TOR_INSERTS.IO_PCIRDCUR",
+            "short_name": "RdCur",
+            "aggregation": "socket"
+        },
+        {
+            "name": "PCIRdCur Miss",
+            "formula": "UNC_CHA_TOR_INSERTS.IO_MISS_PCIRDCUR",
+            "short_name": "RdMiss",
+            "aggregation": "socket"
+        },
+        {
+            "name": "PCIRdCur Hit",
+            "formula": "UNC_CHA_TOR_INSERTS.IO_HIT_PCIRDCUR",
+            "short_name": "RdHit",
+            "aggregation": "socket"
+        },
+        {
+            "name": "ItoM",
+            "formula": "UNC_CHA_TOR_INSERTS.IO_ITOM",
+            "short_name": "ItoM",
+            "aggregation": "socket"
+        },
+        {
+            "name": "ItoM Miss",
+            "formula": "UNC_CHA_TOR_INSERTS.IO_MISS_ITOM",
+            "short_name": "ItoMMiss",
+            "aggregation": "socket"
+        },
+        {
+            "name": "ItoM Hit",
+            "formula": "UNC_CHA_TOR_INSERTS.IO_HIT_ITOM",
+            "short_name": "ItoMHit",
+            "aggregation": "socket"
+        },
+        {
+            "name": "ItoMCacheNear",
+            "formula": "UNC_CHA_TOR_INSERTS.IO_ITOMCACHENEAR",
+            "short_name": "ITMCN",
+            "aggregation": "socket"
+        },
+        {
+            "name": "ItoMCacheNear Miss",
+            "formula": "UNC_CHA_TOR_INSERTS.IO_MISS_ITOMCACHENEAR",
+            "short_name": "ITMCNMiss",
+            "aggregation": "socket"
+        },
+        {
+            "name": "ItoMCacheNear Hit",
+            "formula": "UNC_CHA_TOR_INSERTS.IO_HIT_ITOMCACHENEAR",
+            "short_name": "ITMCNHit",
+            "aggregation": "socket"
+        },
+        {
+            "name": "Total Rd (B)",
+            "formula": "UNC_CHA_TOR_INSERTS.IO_PCIRDCUR * 64",
+            "short_name": "TotRd",
+            "aggregation": "system"
+        },
+        {
+            "name": "Total Wr (B)",
+            "formula": "(UNC_CHA_TOR_INSERTS.IO_ITOM + UNC_CHA_TOR_INSERTS.IO_ITOMCACHENEAR) * 64",
+            "short_name": "TotWr",
+            "aggregation": "system"
+        }
+    ],
+    "layout": {
+        "sections": [
+            {
+                "title": "PCIe Bandwidth",
+                "metrics": ["PCIe Rd (B)", "PCIe Wr (B)"]
+            },
+            {
+                "title": "Read Events",
+                "metrics": ["PCIRdCur", "PCIRdCur Miss", "PCIRdCur Hit"]
+            },
+            {
+                "title": "Write Events",
+                "metrics": ["ItoM", "ItoM Miss", "ItoM Hit", "ItoMCacheNear", "ItoMCacheNear Miss", "ItoMCacheNear Hit"]
+            },
+            {
+                "title": "System Total",
+                "metrics": ["Total Rd (B)", "Total Wr (B)"]
+            }
+        ]
+    }
+}

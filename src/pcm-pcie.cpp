@@ -216,7 +216,7 @@ int mainThrows(int argc, char * argv[])
     if (!platform)
     {
         print_cpu_details();
-        cerr << "Jaketown, Ivytown, Haswell, Broadwell-DE, Skylake, Icelake, Snowridge and Sapphirerapids Server CPU is required for this tool! Program aborted\n";
+        cerr << "Jaketown, Ivytown, Haswell, Broadwell-DE, Skylake, Icelake, Snowridge, Sapphirerapids, Sierra Forest and Graniterapids Server CPU is required for this tool! Program aborted. Please use pcm-io instead.\n";
         exit(EXIT_FAILURE);
     }
 

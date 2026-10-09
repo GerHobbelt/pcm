@@ -2,7 +2,7 @@
 # Copyright (c) 2022-2025, Intel Corporation
 
 # All pcm-* executables
-set(PROJECT_NAMES pcm pcm-numa pcm-latency pcm-power pcm-msr pcm-memory pcm-tsx pcm-pcie pcm-core pcm-iio pcm-pcicfg pcm-mmio pcm-tpmi pcm-raw pcm-accel pcm-sensor-server)
+set(PROJECT_NAMES pcm pcm-numa pcm-latency pcm-power pcm-msr pcm-memory pcm-tsx pcm-pcie pcm-core pcm-iio pcm-pcicfg pcm-mmio pcm-tpmi pcm-raw pcm-io pcm-accel pcm-sensor-server)
 
 set(MINIMUM_OPENSSL_VERSION 1.1.1)
 
@@ -205,7 +205,20 @@ if(PCM_BUILD_EXECUTABLES)
         # specific file for pcm-raw project
         if(${PROJECT_NAME} STREQUAL pcm-raw)
             set(LIBS ${LIBS} PCM_SIMDJSON)
+            target_sources(${PROJECT_NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/event-resolver.cpp)
         endif(${PROJECT_NAME} STREQUAL pcm-raw)
+
+        # specific files for pcm-io project
+        if(${PROJECT_NAME} STREQUAL pcm-io)
+            set(LIBS ${LIBS} PCM_SIMDJSON)
+            target_sources(${PROJECT_NAME} PRIVATE
+                ${CMAKE_CURRENT_SOURCE_DIR}/event-resolver.cpp
+                ${CMAKE_CURRENT_SOURCE_DIR}/pcm-io-metrics.cpp)
+            add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_directory
+                    ${CMAKE_CURRENT_SOURCE_DIR}/pmu-events
+                    $<TARGET_FILE_DIR:${PROJECT_NAME}>/pmu-events)
+        endif(${PROJECT_NAME} STREQUAL pcm-io)
 
         if(${PROJECT_NAME} STREQUAL pcm-sensor-server)
           if(NO_SSL)

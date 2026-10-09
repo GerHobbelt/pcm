@@ -688,6 +688,11 @@ public:
     };
 private:
     std::unordered_map<std::string, int> strToUncorePMUID_ {
+        {"cbo", CBO_PMU_ID},
+        {"cha", CBO_PMU_ID},
+        {"mdf", MDF_PMU_ID},
+        {"pcu", PCU_PMU_ID},
+        {"ubox", UBOX_PMU_ID},
         {"pciex8", PCIE_GEN5x8_PMU_ID},
         {"pciex16", PCIE_GEN5x16_PMU_ID}
     };
