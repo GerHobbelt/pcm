@@ -1224,14 +1224,18 @@ protected:
     }
 
     virtual int_type overflow( int_type ch ) override {
-        // send data in buffer and reset it
+        // Flush buffer first - when overflow() is called, pptr() == epptr() (buffer is full)
+        // Writing to pptr() before flushing would write past the end of outputBuffer_
+        int_type bytesWritten = writeToSocket();
+        if ( traits_type::eof() == bytesWritten ) {
+            return traits_type::eof();
+        }
+        // Reset put area pointers to start of buffer after successful flush
+        Base::setp( outputBuffer_, outputBuffer_ + SIZE );
+        // Now safe to write new character at pptr() (start of empty buffer)
         if ( traits_type::eof() != ch ) {
             *Base::pptr() = ch;
             Base::pbump(1);
-        }
-        int_type bytesWritten = 0;
-        if ( traits_type::eof() == (bytesWritten = writeToSocket()) ) {
-            return traits_type::eof();
         }
         return bytesWritten; // Anything but traits_type::eof() to signal ok.
     }
@@ -3204,9 +3208,9 @@ public:
 
             // Do processing of the request here
             auto callback = callbackList_[request.method()];
-            if (callback)
+            if ( callback ) {
                 (*callback)( hs_, request, response );
-            else {
+            } else {
                 std::string body( "501 Not Implemented." );
                 body += " Method \"" + HTTPMethodProperties::getMethodAsString(request.method()) + "\" is not implemented (yet).";
                 response.createResponse( TextPlain, body, RC_501_NotImplemented );
@@ -4133,12 +4137,21 @@ int mainThrows(int argc, char * argv[]) {
             {
                 if ( (++i) < argc ) {
                     try {
-                        unsigned long val = std::stoul( argv[i] );
+                        std::size_t pos = 0;
+                        unsigned long val = std::stoul( argv[i], &pos );
+                        if ( pos != std::strlen( argv[i] ) )
+                            throw std::invalid_argument( "invalid port" );
                         if ( val > (std::numeric_limits<unsigned short>::max)() )
                             throw std::out_of_range( "port out of range" );
                         port = static_cast<unsigned short>( val );
-                    } catch( std::exception& ) {
-                        std::cerr << "main: port number is not an unsigned short!\n";
+                    } catch( const std::invalid_argument& e ) {
+                        std::cerr << "main: invalid port argument '" << argv[i] << "': " << e.what() << "\n";
+                        ::exit( 2 );
+                    } catch( const std::out_of_range& e ) {
+                        std::cerr << "main: port argument out of range '" << argv[i] << "': " << e.what() << "\n";
+                        ::exit( 2 );
+                    } catch( const std::exception& e ) {
+                        std::cerr << "main: failed to parse port argument '" << argv[i] << "': " << e.what() << "\n";
                         ::exit( 2 );
                     }
                 } else {
@@ -4178,12 +4191,18 @@ int mainThrows(int argc, char * argv[]) {
             {
                 if ( (++i) < argc ) {
                     try {
-                        unsigned long val = std::stoul( argv[i] );
+                        std::size_t pos = 0;
+                        unsigned long val = std::stoul( argv[i], &pos );
+                        if ( pos != std::strlen( argv[i] ) )
+                            throw std::invalid_argument( "invalid debug level" );
                         if ( val > (std::numeric_limits<unsigned short>::max)() )
                             throw std::out_of_range( "debug level out of range" );
                         debug_level = static_cast<unsigned short>( val );
-                    } catch( std::exception& ) {
-                        std::cerr << "main: debug level is not an unsigned short!\n";
+                    } catch ( const std::invalid_argument& e ) {
+                        std::cerr << "main: invalid debug level '" << argv[i] << "': " << e.what() << "\n";
+                        ::exit( 2 );
+                    } catch ( const std::out_of_range& e ) {
+                        std::cerr << "main: debug level '" << argv[i] << "' is out of range: " << e.what() << "\n";
                         ::exit( 2 );
                     }
                 } else {
